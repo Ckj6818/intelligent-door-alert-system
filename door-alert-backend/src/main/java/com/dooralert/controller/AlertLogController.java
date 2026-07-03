@@ -1,13 +1,18 @@
-package com.dooralert.controller;
+﻿package com.dooralert.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
-import com.dooralert.entity.AlertLog;
+import com.dooralert.dto.AlertLogDTO;
+import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.service.AlertLogService;
+import com.dooralert.vo.AlertLogVO;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
+/**
+ * 告警日志管理接口
+ */
 @RestController
 @RequestMapping("/api/alerts")
 public class AlertLogController {
@@ -15,13 +20,68 @@ public class AlertLogController {
     @Autowired
     private AlertLogService alertLogService;
 
+    /**
+     * 分页查询告警列表
+     */
     @GetMapping
-    public Result<List<AlertLog>> list() {
-        return Result.success(alertLogService.list());
+    public Result<IPage<AlertLogVO>> page(
+            @RequestParam(defaultValue = "1") long current,
+            @RequestParam(defaultValue = "10") long size) {
+        return Result.success(alertLogService.pageAlerts(current, size));
     }
 
+    /**
+     * 根据 ID 查询告警详情
+     */
+    @GetMapping("/{id}")
+    public Result<AlertLogVO> getById(@PathVariable Long id) {
+        AlertLogVO vo = alertLogService.getAlertById(id);
+        return vo != null ? Result.success(vo) : Result.error("告警记录不存在");
+    }
+
+    /**
+     * 新增告警
+     */
     @PostMapping
-    public Result<Boolean> save(@RequestBody AlertLog alertLog) {
-        return Result.success(alertLogService.save(alertLog));
+    public Result<Boolean> add(@RequestBody AlertLogDTO dto) {
+        return Result.success(alertLogService.addAlert(dto));
+    }
+
+    /**
+     * 修改告警（如变更处理状态）
+     */
+    @PutMapping("/{id}")
+    public Result<Boolean> update(@PathVariable Long id, @RequestBody AlertLogDTO dto) {
+        return alertLogService.updateAlert(id, dto)
+                ? Result.success(true)
+                : Result.error("告警记录不存在或更新失败");
+    }
+
+    /**
+     * 删除告警
+     */
+    @DeleteMapping("/{id}")
+    public Result<Boolean> delete(@PathVariable Long id) {
+        return Result.success(alertLogService.removeById(id));
+    }
+
+    // ==========================================================
+    //  AI 边缘端专属上报接口（供 Python 机器视觉脚本调用）
+    // ==========================================================
+
+    /**
+     * 边缘端告警上报
+     * <p>
+     * Python 端通过 POST 请求将检测到的告警信息推送至此接口。
+     * 系统自动将处理状态设为 0（未处理）并持久化。
+     * </p>
+     *
+     * @param dto 告警上报数据（含 JSR-303 校验）
+     * @return 入库后的告警 VO 信息
+     */
+    @PostMapping("/upload")
+    public Result<AlertLogVO> upload(@Valid @RequestBody AlertUploadDTO dto) {
+        AlertLogVO vo = alertLogService.uploadAlert(dto);
+        return Result.success("告警上报成功", vo);
     }
 }

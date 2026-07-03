@@ -1,13 +1,17 @@
-package com.dooralert.controller;
+﻿package com.dooralert.controller;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
-import com.dooralert.entity.SysUser;
+import com.dooralert.dto.SysUserDTO;
 import com.dooralert.service.SysUserService;
+import com.dooralert.vo.SysUserVO;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
+/**
+ * 系统用户管理接口
+ */
 @RestController
 @RequestMapping("/api/users")
 public class SysUserController {
@@ -15,13 +19,48 @@ public class SysUserController {
     @Autowired
     private SysUserService sysUserService;
 
+    /**
+     * 分页查询用户列表
+     */
     @GetMapping
-    public Result<List<SysUser>> list() {
-        return Result.success(sysUserService.list());
+    public Result<IPage<SysUserVO>> page(
+            @RequestParam(defaultValue = "1") long current,
+            @RequestParam(defaultValue = "10") long size) {
+        return Result.success(sysUserService.pageUsers(current, size));
     }
 
+    /**
+     * 根据 ID 查询用户详情
+     */
+    @GetMapping("/{id}")
+    public Result<SysUserVO> getById(@PathVariable Long id) {
+        SysUserVO vo = sysUserService.getUserById(id);
+        return vo != null ? Result.success(vo) : Result.error("用户不存在");
+    }
+
+    /**
+     * 新增用户
+     */
     @PostMapping
-    public Result<Boolean> save(@RequestBody SysUser sysUser) {
-        return Result.success(sysUserService.save(sysUser));
+    public Result<Boolean> add(@Valid @RequestBody SysUserDTO dto) {
+        return Result.success(sysUserService.addUser(dto));
+    }
+
+    /**
+     * 修改用户
+     */
+    @PutMapping("/{id}")
+    public Result<Boolean> update(@PathVariable Long id, @Valid @RequestBody SysUserDTO dto) {
+        return sysUserService.updateUser(id, dto)
+                ? Result.success(true)
+                : Result.error("用户不存在或更新失败");
+    }
+
+    /**
+     * 删除用户
+     */
+    @DeleteMapping("/{id}")
+    public Result<Boolean> delete(@PathVariable Long id) {
+        return Result.success(sysUserService.removeById(id));
     }
 }
