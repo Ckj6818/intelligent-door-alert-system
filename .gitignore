@@ -1,0 +1,34 @@
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+*.iml
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+logs/
+*.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!door-alert-frontend/.vscode/extensions.json
+
+# Env & secrets
+.env
+.env.*
