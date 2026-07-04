@@ -23,10 +23,15 @@ public class SysUserController {
      * 分页查询用户列表
      */
     @GetMapping
-    public Result<IPage<SysUserVO>> page(
+    public Result<?> page(
             @RequestParam(defaultValue = "1") long current,
             @RequestParam(defaultValue = "10") long size) {
-        return Result.success(sysUserService.pageUsers(current, size));
+        try {
+            return Result.success(sysUserService.pageUsers(current, size));
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error("Error: " + e.getMessage() + " | Cause: " + (e.getCause() != null ? e.getCause().getMessage() : ""));
+        }
     }
 
     /**
