@@ -1,10 +1,36 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import viteLogo from '../assets/vite.svg'
 import heroImg from '../assets/hero.png'
 import vueLogo from '../assets/vue.svg'
 
 const count = ref(0)
+const apiStatus = ref('检测中...')
+const alerts = ref([])
+const devices = ref([])
+
+async function loadDashboard() {
+  try {
+    const [usersRes, alertsRes, devicesRes] = await Promise.all([
+      fetch('/api/users?size=5'),
+      fetch('/api/alerts?size=5'),
+      fetch('/api/devices?size=5'),
+    ])
+    if (!usersRes.ok || !alertsRes.ok || !devicesRes.ok) {
+      throw new Error('接口请求失败')
+    }
+    const usersData = await usersRes.json()
+    const alertsData = await alertsRes.json()
+    const devicesData = await devicesRes.json()
+    apiStatus.value = `后端已连通 · 用户 ${usersData.data?.total ?? 0} 条 · 告警 ${alertsData.data?.total ?? 0} 条 · 设备 ${devicesData.data?.total ?? 0} 条`
+    alerts.value = alertsData.data?.records ?? []
+    devices.value = devicesData.data?.records ?? []
+  } catch (e) {
+    apiStatus.value = `后端未连通：${e.message}`
+  }
+}
+
+onMounted(loadDashboard)
 </script>
 
 <template>
@@ -15,12 +41,34 @@ const count = ref(0)
       <img :src="viteLogo" class="vite" alt="Vite logo" />
     </div>
     <div>
-      <h1>Get started</h1>
+      <h1>智能门禁安防系统</h1>
+      <p class="status">{{ apiStatus }}</p>
       <p>Edit <code>src/App.vue</code> and save to test <code>HMR</code></p>
     </div>
     <button type="button" class="counter" @click="count++">
       Count is {{ count }}
     </button>
+  </section>
+
+  <section class="dashboard">
+    <div class="panel">
+      <h2>最近告警</h2>
+      <p v-if="!alerts.length">暂无告警记录</p>
+      <ul v-else>
+        <li v-for="item in alerts" :key="item.id">
+          设备 {{ item.deviceId }} · 危险等级 {{ item.dangerLevel }} · {{ item.createTime }}
+        </li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>设备列表</h2>
+      <p v-if="!devices.length">暂无设备</p>
+      <ul v-else>
+        <li v-for="item in devices" :key="item.id">
+          {{ item.deviceName }} · {{ item.location }} · {{ item.status === 1 ? '在线' : '离线' }}
+        </li>
+      </ul>
+    </div>
   </section>
 
   <div class="ticks"></div>
