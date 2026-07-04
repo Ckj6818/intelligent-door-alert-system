@@ -81,7 +81,12 @@ public class AlertLogController {
      */
     @PostMapping("/upload")
     public Result<AlertLogVO> upload(@Valid @RequestBody AlertUploadDTO dto) {
-        AlertLogVO vo = alertLogService.uploadAlert(dto);
-        return Result.success("告警上报成功", vo);
+        try {
+            AlertLogVO vo = alertLogService.uploadAlert(dto);
+            return Result.success("告警上报成功", vo);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error("Error: " + e.getMessage() + " | Cause: " + (e.getCause() != null ? e.getCause().getMessage() : ""));
+        }
     }
 }
