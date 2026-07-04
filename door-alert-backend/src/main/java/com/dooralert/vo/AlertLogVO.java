@@ -1,4 +1,4 @@
-﻿package com.dooralert.vo;
+package com.dooralert.vo;
 
 import lombok.Data;
 

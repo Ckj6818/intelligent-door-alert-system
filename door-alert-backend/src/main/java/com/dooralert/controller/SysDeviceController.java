@@ -1,4 +1,4 @@
-﻿package com.dooralert.controller;
+package com.dooralert.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;

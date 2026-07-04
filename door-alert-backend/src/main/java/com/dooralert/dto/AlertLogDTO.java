@@ -1,4 +1,4 @@
-﻿package com.dooralert.dto;
+package com.dooralert.dto;
 
 import lombok.Data;
 

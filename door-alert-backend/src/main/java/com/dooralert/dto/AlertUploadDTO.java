@@ -1,4 +1,4 @@
-﻿package com.dooralert.dto;
+package com.dooralert.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
