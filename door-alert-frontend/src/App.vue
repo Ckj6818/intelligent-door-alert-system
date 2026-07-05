@@ -5,10 +5,16 @@ import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
 import { getDeviceList, getAlertList, handleAlert } from '@/api/index'
 
+const ORIGINAL_TITLE = '智能门禁安防管理大屏'
+const ALERT_TITLE = '【⚠️有新告警】'
+
 // 数据状态
 const deviceList = ref([])
 const alertList = ref([])
 let alertTimer = null
+let maxAlertId = 0
+let titleBlinkTimer = null
+let isTitleBlinking = false
 
 // 图表 DOM 引用与实例
 const dangerChartRef = ref(null)
@@ -16,12 +22,18 @@ const deviceChartRef = ref(null)
 let dangerChart = null
 let deviceChart = null
 
-// 显式拼接后端地址，绕过可能未生效的 Vite 代理
-const imageBaseUrl = 'http://localhost:8081'
+const imageBaseUrl = ''
 
 const resolveImageUrl = (imageUrl) => {
   if (!imageUrl || !imageUrl.startsWith('/uploads/')) return ''
   return imageBaseUrl + imageUrl
+}
+
+// ECharts 暗色主题通用配置
+const darkTooltip = {
+  backgroundColor: 'rgba(16, 24, 48, 0.95)',
+  borderColor: '#1a2f56',
+  textStyle: { color: '#e2e8f0' }
 }
 
 // 数据总览统计
@@ -52,7 +64,53 @@ const deviceStatusStats = computed(() => {
   }
 })
 
-// 初始化 ECharts 实例
+const stopTitleBlink = () => {
+  if (titleBlinkTimer) {
+    clearInterval(titleBlinkTimer)
+    titleBlinkTimer = null
+  }
+  isTitleBlinking = false
+  document.title = ORIGINAL_TITLE
+}
+
+const startTitleBlink = () => {
+  if (isTitleBlinking) return
+  isTitleBlinking = true
+  let showAlert = true
+  titleBlinkTimer = setInterval(() => {
+    document.title = showAlert ? ALERT_TITLE : ORIGINAL_TITLE
+    showAlert = !showAlert
+  }, 800)
+}
+
+const speakHighAlert = () => {
+  if (!('speechSynthesis' in window)) return
+  window.speechSynthesis.cancel()
+  const utterance = new SpeechSynthesisUtterance(
+    '警告，前门摄像头检测到人员剧烈靠近，请及时处理！'
+  )
+  utterance.lang = 'zh-CN'
+  utterance.rate = 1
+  utterance.pitch = 1
+  window.speechSynthesis.speak(utterance)
+}
+
+const checkNewHighAlerts = (records) => {
+  if (!records.length) return
+
+  const newHighAlerts = records.filter(
+    (item) => item.id > maxAlertId && item.dangerLevel >= 3
+  )
+  const newMaxId = Math.max(...records.map((item) => item.id))
+
+  if (maxAlertId > 0 && newHighAlerts.length > 0) {
+    speakHighAlert()
+    startTitleBlink()
+  }
+
+  maxAlertId = newMaxId
+}
+
 const initCharts = () => {
   try {
     if (dangerChartRef.value && !dangerChart) {
@@ -67,7 +125,6 @@ const initCharts = () => {
   }
 }
 
-// 根据最新数据更新图表
 const updateCharts = () => {
   try {
     const dangerStats = dangerLevelStats.value
@@ -75,55 +132,59 @@ const updateCharts = () => {
 
     if (dangerChart) {
       dangerChart.setOption({
-      tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-      legend: { bottom: 0, left: 'center' },
-      color: ['#f56c6c', '#e6a23c', '#909399'],
-      series: [
-        {
-          name: '告警等级',
-          type: 'pie',
-          radius: ['40%', '68%'],
-          center: ['50%', '45%'],
-          avoidLabelOverlap: true,
-          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-          label: { show: true, formatter: '{b}\n{c}' },
-          data: [
-            { value: dangerStats.HIGH, name: 'HIGH' },
-            { value: dangerStats.MEDIUM, name: 'MEDIUM' },
-            { value: dangerStats.LOW, name: 'LOW' }
-          ]
-        }
-      ]
-    })
-  }
+        tooltip: { ...darkTooltip, trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+        legend: { bottom: 0, left: 'center', textStyle: { color: '#ffffff' } },
+        color: ['#f56c6c', '#e6a23c', '#60a5fa'],
+        series: [
+          {
+            name: '告警等级',
+            type: 'pie',
+            radius: ['40%', '68%'],
+            center: ['50%', '45%'],
+            avoidLabelOverlap: true,
+            itemStyle: { borderRadius: 6, borderColor: '#0f1423', borderWidth: 2 },
+            label: { show: true, formatter: '{b}\n{c}', color: '#ffffff' },
+            data: [
+              { value: dangerStats.HIGH, name: 'HIGH' },
+              { value: dangerStats.MEDIUM, name: 'MEDIUM' },
+              { value: dangerStats.LOW, name: 'LOW' }
+            ]
+          }
+        ]
+      })
+    }
 
-  if (deviceChart) {
-    deviceChart.setOption({
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-      grid: { left: '8%', right: '8%', bottom: '12%', top: '12%', containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: ['在线', '离线'],
-        axisTick: { alignWithLabel: true }
-      },
-      yAxis: {
-        type: 'value',
-        minInterval: 1
-      },
-      color: ['#67c23a', '#909399'],
-      series: [
-        {
-          name: '设备数量',
-          type: 'bar',
-          barWidth: '42%',
-          itemStyle: { borderRadius: [6, 6, 0, 0] },
-          data: [
-            { value: deviceStats.online, itemStyle: { color: '#67c23a' } },
-            { value: deviceStats.offline, itemStyle: { color: '#909399' } }
-          ]
-        }
-      ]
-    })
+    if (deviceChart) {
+      deviceChart.setOption({
+        tooltip: { ...darkTooltip, trigger: 'axis', axisPointer: { type: 'shadow' } },
+        grid: { left: '8%', right: '8%', bottom: '12%', top: '12%', containLabel: true },
+        xAxis: {
+          type: 'category',
+          data: ['在线', '离线'],
+          axisTick: { alignWithLabel: true },
+          axisLabel: { color: '#ffffff' },
+          axisLine: { lineStyle: { color: '#3b82f6' } }
+        },
+        yAxis: {
+          type: 'value',
+          minInterval: 1,
+          axisLabel: { color: '#ffffff' },
+          axisLine: { lineStyle: { color: '#3b82f6' } },
+          splitLine: { lineStyle: { color: 'rgba(96, 165, 250, 0.25)' } }
+        },
+        series: [
+          {
+            name: '设备数量',
+            type: 'bar',
+            barWidth: '42%',
+            itemStyle: { borderRadius: [6, 6, 0, 0] },
+            data: [
+              { value: deviceStats.online, itemStyle: { color: '#34d399' } },
+              { value: deviceStats.offline, itemStyle: { color: '#64748b' } }
+            ]
+          }
+        ]
+      })
     }
   } catch (error) {
     console.error('图表更新失败', error)
@@ -135,7 +196,6 @@ const handleResize = () => {
   deviceChart?.resize()
 }
 
-// 获取设备列表
 const fetchDeviceList = async () => {
   try {
     const res = await getDeviceList({ current: 1, size: 50 })
@@ -145,14 +205,14 @@ const fetchDeviceList = async () => {
   }
 }
 
-// 获取告警记录
 const fetchAlertList = async () => {
   try {
     const res = await getAlertList({ current: 1, size: 50 })
-    const records = res.records || []
-    alertList.value = records.sort(
+    const records = (res.records || []).sort(
       (a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime()
     )
+    checkNewHighAlerts(records)
+    alertList.value = records
   } catch (error) {
     console.error('获取告警记录失败', error)
   }
@@ -163,7 +223,6 @@ const fetchDashboardData = async () => {
   updateCharts()
 }
 
-// 格式化时间
 const formatTime = (timeStr) => {
   if (!timeStr) return '-'
   return new Date(timeStr).toLocaleString()
@@ -176,7 +235,6 @@ const getDangerLevelText = (level) => {
   return 'SAFE'
 }
 
-// 导出告警报表为 Excel
 const exportToExcel = () => {
   if (!alertList.value.length) {
     ElMessage.warning('暂无告警数据可导出')
@@ -198,8 +256,8 @@ const exportToExcel = () => {
   ElMessage.success('报表导出成功')
 }
 
-// 处理告警
 const onHandleAlert = async (id) => {
+  stopTitleBlink()
   try {
     await handleAlert(id)
     ElMessage.success('告警已处理')
@@ -210,11 +268,16 @@ const onHandleAlert = async (id) => {
   }
 }
 
+const onDashboardClick = () => {
+  stopTitleBlink()
+}
+
 watch([alertList, deviceList], () => {
   updateCharts()
 }, { deep: true })
 
 onMounted(async () => {
+  document.title = ORIGINAL_TITLE
   await fetchDashboardData()
   await nextTick()
   requestAnimationFrame(() => {
@@ -229,6 +292,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (alertTimer) clearInterval(alertTimer)
+  stopTitleBlink()
+  window.speechSynthesis?.cancel()
   window.removeEventListener('resize', handleResize)
   dangerChart?.dispose()
   deviceChart?.dispose()
@@ -238,17 +303,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="dashboard-wrapper">
+  <div class="dashboard-wrapper" @click="onDashboardClick">
     <el-container class="dashboard-container">
       <el-header class="dashboard-header">
+        <div class="header-glow"></div>
         <h1 class="header-title">智能门禁安防管理大屏</h1>
+        <div class="header-subtitle">INTELLIGENT DOOR ALERT COMMAND CENTER</div>
       </el-header>
 
       <el-main class="dashboard-main">
-        <!-- 数据汇总与图表区 -->
         <el-row :gutter="20" class="stats-row">
           <el-col :span="8">
-            <el-card class="dashboard-card stats-card" shadow="hover">
+            <el-card class="dashboard-card stats-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>数据总览</span>
@@ -272,7 +338,7 @@ onUnmounted(() => {
           </el-col>
 
           <el-col :span="8">
-            <el-card class="dashboard-card chart-card" shadow="hover">
+            <el-card class="dashboard-card chart-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>告警等级分布</span>
@@ -283,7 +349,7 @@ onUnmounted(() => {
           </el-col>
 
           <el-col :span="8">
-            <el-card class="dashboard-card chart-card" shadow="hover">
+            <el-card class="dashboard-card chart-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>设备状态分布</span>
@@ -294,16 +360,15 @@ onUnmounted(() => {
           </el-col>
         </el-row>
 
-        <!-- 看板 A / 看板 B：数据表格区 -->
         <el-row :gutter="20" class="table-row">
           <el-col :span="8">
-            <el-card class="dashboard-card" shadow="hover">
+            <el-card class="dashboard-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>设备运行状态</span>
                 </div>
               </template>
-              <el-table :data="deviceList" height="100%" style="width: 100%">
+              <el-table class="dark-table" :data="deviceList" height="100%" style="width: 100%">
                 <el-table-column prop="id" label="设备 ID" width="80" />
                 <el-table-column prop="deviceName" label="设备名称" show-overflow-tooltip />
                 <el-table-column prop="location" label="位置" show-overflow-tooltip />
@@ -322,18 +387,18 @@ onUnmounted(() => {
           </el-col>
 
           <el-col :span="16">
-            <el-card class="dashboard-card" shadow="hover">
+            <el-card class="dashboard-card" shadow="never">
               <template #header>
                 <div class="card-header-row">
                   <div class="card-header">
                     <span>实时告警记录</span>
                   </div>
-                  <el-button type="success" size="small" @click="exportToExcel">
+                  <el-button type="success" size="small" @click.stop="exportToExcel">
                     导出为 Excel
                   </el-button>
                 </div>
               </template>
-              <el-table :data="alertList" height="100%" style="width: 100%">
+              <el-table class="dark-table" :data="alertList" height="100%" style="width: 100%">
                 <el-table-column label="告警时间" width="170">
                   <template #default="scope">
                     {{ formatTime(scope.row.createTime) }}
@@ -344,7 +409,7 @@ onUnmounted(() => {
                   <template #default="scope">
                     <el-image
                       v-if="resolveImageUrl(scope.row.imageUrl)"
-                      style="width: 50px; height: 50px; border-radius: 4px;"
+                      class="alert-thumb"
                       :src="resolveImageUrl(scope.row.imageUrl)"
                       :preview-src-list="[resolveImageUrl(scope.row.imageUrl)]"
                       fit="cover"
@@ -374,7 +439,7 @@ onUnmounted(() => {
                   <template #default="scope">
                     <el-tag
                       :type="scope.row.status === 1 ? 'success' : 'danger'"
-                      effect="light"
+                      effect="dark"
                     >
                       {{ scope.row.status === 1 ? '已处理' : '未处理' }}
                     </el-tag>
@@ -386,7 +451,7 @@ onUnmounted(() => {
                       v-if="scope.row.status !== 1"
                       type="primary"
                       size="small"
-                      @click="onHandleAlert(scope.row.id)"
+                      @click.stop="onHandleAlert(scope.row.id)"
                     >
                       处理
                     </el-button>
@@ -407,6 +472,7 @@ body {
   margin: 0;
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background-color: #0f1423;
 }
 </style>
 
@@ -414,8 +480,9 @@ body {
 .dashboard-wrapper {
   width: 100vw;
   height: 100vh;
-  background-color: #f0f2f5;
+  background: radial-gradient(ellipse at top, #141e38 0%, #0f1423 45%, #0a0a0c 100%);
   overflow: hidden;
+  color: #e2e8f0;
 }
 
 .dashboard-container {
@@ -423,27 +490,50 @@ body {
 }
 
 .dashboard-header {
-  background-color: #1e293b;
+  position: relative;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  background: rgba(16, 24, 48, 0.85);
+  border-bottom: 1px solid #1a2f56;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   z-index: 10;
-  height: 64px !important;
+  height: 72px !important;
+  overflow: hidden;
+}
+
+.header-glow {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, #3b82f6, transparent);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.8);
 }
 
 .header-title {
-  color: #ffffff;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: 3px;
+  color: #f1f5f9;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 4px;
   margin: 0;
+  text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+.header-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: #64748b;
 }
 
 .dashboard-main {
   padding: 20px;
   box-sizing: border-box;
-  height: calc(100vh - 64px);
+  height: calc(100vh - 72px);
   overflow: hidden;
 }
 
@@ -470,19 +560,31 @@ body {
   flex: 1;
   overflow: hidden;
   padding: 0;
+  background: transparent !important;
 }
 
 .dashboard-card {
-  border-radius: 12px;
-  border: none;
-  background-color: #ffffff;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
-  transition: all 0.3s ease;
+  border-radius: 8px;
+  border: 1px solid #1a2f56;
+  background: rgba(16, 24, 48, 0.8) !important;
+  box-shadow: 0 0 15px rgba(0, 150, 255, 0.1) !important;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
   overflow: hidden;
 }
 
 .dashboard-card:hover {
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  border-color: #2563eb;
+  box-shadow: 0 0 24px rgba(0, 150, 255, 0.2) !important;
+}
+
+.dashboard-card :deep(.el-card__body) {
+  background: transparent !important;
+}
+
+.dashboard-card :deep(.el-card__header) {
+  background: rgba(26, 47, 86, 0.45);
+  border-bottom: 1px solid #1a2f56;
+  padding: 14px 18px;
 }
 
 .stats-card,
@@ -497,6 +599,7 @@ body {
   padding: 12px 16px;
   height: calc(280px - 57px);
   box-sizing: border-box;
+  background: transparent !important;
 }
 
 .card-header-row {
@@ -506,9 +609,9 @@ body {
 }
 
 .card-header {
-  font-size: 18px;
-  font-weight: bold;
-  color: #334155;
+  font-size: 16px;
+  font-weight: 600;
+  color: #e2e8f0;
   position: relative;
   padding-left: 12px;
 }
@@ -520,9 +623,10 @@ body {
   top: 50%;
   transform: translateY(-50%);
   width: 4px;
-  height: 18px;
-  background-color: #409eff;
+  height: 16px;
+  background: linear-gradient(180deg, #60a5fa, #3b82f6);
   border-radius: 2px;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
 }
 
 .summary-grid {
@@ -540,22 +644,25 @@ body {
 .summary-value {
   font-size: 42px;
   font-weight: 700;
-  color: #409eff;
+  color: #60a5fa;
   line-height: 1.2;
+  text-shadow: 0 0 16px rgba(96, 165, 250, 0.4);
 }
 
 .summary-value.warning {
-  color: #e6a23c;
+  color: #fbbf24;
+  text-shadow: 0 0 16px rgba(251, 191, 36, 0.4);
 }
 
 .summary-value.danger {
-  color: #f56c6c;
+  color: #f87171;
+  text-shadow: 0 0 16px rgba(248, 113, 113, 0.4);
 }
 
 .summary-label {
   margin-top: 8px;
-  font-size: 14px;
-  color: #64748b;
+  font-size: 13px;
+  color: #94a3b8;
 }
 
 .chart-container {
@@ -564,8 +671,86 @@ body {
   overflow: hidden;
 }
 
+.alert-thumb {
+  width: 50px;
+  height: 50px;
+  border-radius: 4px;
+  border: 1px solid #1a2f56;
+}
+
 .empty-img {
-  color: #999;
+  color: #64748b;
   font-size: 12px;
+}
+
+/* ========== 表格暗色强力覆写（消灭 Element Plus 默认白底） ========== */
+
+/* 彻底让表格外层容器变透明，并统一文字颜色 */
+:deep(.el-table) {
+  background-color: transparent !important;
+  color: #cbd5e1 !important;
+  --el-table-bg-color: transparent !important;
+  --el-table-tr-bg-color: rgba(20, 28, 52, 0.5) !important;
+  --el-table-header-bg-color: rgba(16, 24, 48, 0.85) !important;
+  --el-table-row-hover-bg-color: rgba(30, 64, 175, 0.7) !important;
+  --el-table-text-color: #e2e8f0 !important;
+  --el-table-header-text-color: #38bdf8 !important;
+  --el-table-border-color: #1a2f56 !important;
+  --el-table-current-row-bg-color: rgba(30, 64, 175, 0.7) !important;
+}
+
+/* 消除表头死白，改为半透明科幻蓝 */
+:deep(.el-table th.el-table__cell) {
+  background-color: rgba(16, 24, 48, 0.85) !important;
+  color: #38bdf8 !important;
+  border-bottom: 1px solid #1a2f56 !important;
+}
+
+/* 消除所有数据行死白，改为深色半透明 */
+:deep(.el-table tr),
+:deep(.el-table td.el-table__cell) {
+  background-color: rgba(20, 28, 52, 0.5) !important;
+  color: #e2e8f0 !important;
+  border-bottom: 1px solid #1a2f56 !important;
+}
+
+/* 消除表格右侧和底部的空白填充区死白 */
+:deep(.el-table__inner-wrapper::before),
+:deep(.el-table__inner-wrapper),
+:deep(.el-table__body-wrapper),
+:deep(.el-table__header-wrapper) {
+  background-color: transparent !important;
+}
+
+:deep(.el-table__empty-block) {
+  background-color: rgba(20, 28, 52, 0.5) !important;
+}
+
+:deep(.el-table__empty-text) {
+  color: #94a3b8 !important;
+}
+
+/* 鼠标悬浮行（Hover）的高亮效果微调 */
+:deep(.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell) {
+  background-color: rgba(30, 64, 175, 0.7) !important;
+}
+
+/* 固定列与滚动条补丁 */
+:deep(.el-table__fixed-right-patch),
+:deep(.el-table__fixed-left-patch) {
+  background-color: rgba(16, 24, 48, 0.85) !important;
+}
+
+:deep(.el-table-fixed-column--right),
+:deep(.el-table-fixed-column--left) {
+  background-color: rgba(20, 28, 52, 0.5) !important;
+}
+
+:deep(.el-table__body tr.hover-row > td.el-table__cell) {
+  background-color: rgba(30, 64, 175, 0.7) !important;
+}
+
+:deep(.el-scrollbar__thumb) {
+  background-color: rgba(59, 130, 246, 0.4) !important;
 }
 </style>
