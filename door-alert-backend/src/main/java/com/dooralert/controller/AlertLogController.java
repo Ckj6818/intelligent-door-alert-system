@@ -80,9 +80,18 @@ public class AlertLogController {
      * @return 入库后的告警 VO 信息
      */
     @PostMapping("/upload")
-    public Result<AlertLogVO> upload(@Valid @RequestBody AlertUploadDTO dto) {
+    public Result<AlertLogVO> upload(
+            @RequestParam("deviceId") Long deviceId,
+            @RequestParam("proximityRatio") Double proximityRatio,
+            @RequestParam("dangerLevel") Integer dangerLevel,
+            @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
         try {
-            AlertLogVO vo = alertLogService.uploadAlert(dto);
+            AlertUploadDTO dto = new AlertUploadDTO();
+            dto.setDeviceId(deviceId);
+            dto.setProximityRatio(proximityRatio);
+            dto.setDangerLevel(dangerLevel);
+            
+            AlertLogVO vo = alertLogService.uploadAlert(dto, file);
             return Result.success("告警上报成功", vo);
         } catch (Exception e) {
             e.printStackTrace();

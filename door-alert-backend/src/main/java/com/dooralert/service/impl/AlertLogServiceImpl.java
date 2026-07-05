@@ -48,16 +48,42 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     }
 
     @Override
-    public AlertLogVO uploadAlert(AlertUploadDTO dto) {
+    public AlertLogVO uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file) {
         log.info("接收到边缘端告警数据，设备ID: {}", dto.getDeviceId());
 
         AlertLog entity = new AlertLog();
         entity.setDeviceId(dto.getDeviceId());
-        entity.setImageUrl(dto.getImageUrl());
         entity.setProximityRatio(dto.getProximityRatio());
         entity.setDangerLevel(dto.getDangerLevel());
         // 默认未处理
         entity.setStatus(0);
+
+        // 处理文件上传
+        if (file != null && !file.isEmpty()) {
+            try {
+                // 定义项目根目录下的 uploads 文件夹
+                java.io.File uploadDir = new java.io.File("uploads");
+                if (!uploadDir.exists()) {
+                    uploadDir.mkdirs();
+                }
+                
+                // 生成唯一文件名
+                String originalFilename = file.getOriginalFilename();
+                String suffix = originalFilename != null && originalFilename.contains(".") 
+                        ? originalFilename.substring(originalFilename.lastIndexOf(".")) 
+                        : ".jpg";
+                String newFilename = java.util.UUID.randomUUID().toString().replace("-", "") + suffix;
+                
+                // 保存文件到本地磁盘
+                java.io.File dest = new java.io.File(uploadDir, newFilename);
+                file.transferTo(dest);
+                
+                // 设置图片相对路径，前端可直接通过 /uploads/xxx.jpg 访问
+                entity.setImageUrl("/uploads/" + newFilename);
+            } catch (java.io.IOException e) {
+                log.error("图片上传失败", e);
+            }
+        }
 
         this.save(entity);
 

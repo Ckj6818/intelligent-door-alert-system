@@ -32,3 +32,10 @@ Thumbs.db
 # Env & secrets
 .env
 .env.*
+
+# AI Models & Temp
+*.pt
+temp_capture_*.jpg
+
+# Backend Uploads
+uploads/

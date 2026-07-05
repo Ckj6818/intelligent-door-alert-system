@@ -20,5 +20,5 @@ public interface AlertLogService extends IService<AlertLog> {
     /**
      * 边缘端上报告警（供 Python 视觉脚本调用）
      */
-    AlertLogVO uploadAlert(AlertUploadDTO dto);
+    AlertLogVO uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);
 }

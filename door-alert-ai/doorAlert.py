@@ -18,21 +18,35 @@ LAST_UPLOAD_TIME = 0
 UPLOAD_COOLDOWN = 2.0  
 
 
-def upload_alert_async(payload):
+import os
+
+def upload_alert_async(payload, image_path):
     """
     异步上传告警数据到云端的子线程任务。
-    使用 timeout=2 防止阻塞，使用 try-except 防止程序崩溃。
+    使用 multipart/form-data 上传图片及参数。
     """
     try:
-        # 发送 HTTP POST 请求
-        response = requests.post(BACKEND_UPLOAD_URL, json=payload, timeout=2)
+        # 准备文件
+        with open(image_path, 'rb') as f:
+            files = {'file': (os.path.basename(image_path), f, 'image/jpeg')}
+            # 发送 HTTP POST 请求
+            response = requests.post(BACKEND_UPLOAD_URL, data=payload, files=files, timeout=5)
+            
         if response.status_code == 200:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] 数据上报云端成功！响应: {response.json()}")
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，后端返回状态码: {response.status_code}")
     except requests.exceptions.RequestException as e:
-        # 仅打印警告，严禁阻塞或抛出到主线程
         print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，请检查后端服务是否启动或网络是否连通")
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] 上报过程出现异常: {str(e)}")
+    finally:
+        # 上报完成后，清理临时图片文件
+        if os.path.exists(image_path):
+            try:
+                os.remove(image_path)
+            except:
+                pass
 
 
 def audible_beep():
@@ -104,18 +118,20 @@ def main():
                         if current_time - LAST_UPLOAD_TIME > UPLOAD_COOLDOWN:
                             audible_beep()
                             
-                            # 组装严格匹配 Java 端 AlertUploadDTO 的 Payload 字典
-                            # 后端要求 proximityRatio 为 Double (此处传 float 即可), dangerLevel 为 Integer (0-3)
+                            # 保存当前视频帧为临时图片
+                            temp_image_path = f"temp_capture_{int(current_time)}.jpg"
+                            cv2.imwrite(temp_image_path, frame)
+                            
+                            # 组装参数 payload，移除 imageUrl（将由文件形式上传）
                             danger_level_int = 3 if proximity_ratio >= 0.4 else 2
                             payload = {
                                 "deviceId": DEVICE_ID,
                                 "proximityRatio": float(proximity_ratio),
-                                "dangerLevel": danger_level_int,
-                                "imageUrl": "local_cam_capture.jpg"  # 暂用占位符
+                                "dangerLevel": danger_level_int
                             }
                             
                             # 开启后台线程执行上报请求，绝不阻塞主视频流
-                            threading.Thread(target=upload_alert_async, args=(payload,), daemon=True).start()
+                            threading.Thread(target=upload_alert_async, args=(payload, temp_image_path), daemon=True).start()
                             
                             # 更新最后上报时间戳
                             LAST_UPLOAD_TIME = current_time

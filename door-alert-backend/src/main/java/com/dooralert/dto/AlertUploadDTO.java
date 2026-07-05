@@ -13,8 +13,6 @@ public class AlertUploadDTO {
     @NotNull(message = "设备ID不能为空")
     private Long deviceId;
 
-    @NotBlank(message = "图片URL不能为空")
-    private String imageUrl;
 
     @NotNull(message = "接近度不能为空")
     private Double proximityRatio;
