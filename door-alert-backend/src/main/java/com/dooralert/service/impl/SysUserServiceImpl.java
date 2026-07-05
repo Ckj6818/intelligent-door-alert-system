@@ -3,16 +3,23 @@ package com.dooralert.service.impl;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.dooralert.dto.LoginDTO;
 import com.dooralert.dto.SysUserDTO;
 import com.dooralert.entity.SysUser;
 import com.dooralert.mapper.SysUserMapper;
 import com.dooralert.service.SysUserService;
+import com.dooralert.util.JwtUtil;
+import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
+
+    @Autowired
+    private JwtUtil jwtUtil;
 
     @Override
     public IPage<SysUserVO> pageUsers(long current, long size) {
@@ -42,6 +49,30 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         BeanUtils.copyProperties(dto, entity);
         entity.setId(id);
         return this.updateById(entity);
+    }
+
+    @Override
+    public LoginVO login(LoginDTO dto) {
+        String username = dto.getUsername() == null ? "" : dto.getUsername().trim();
+        String password = dto.getPassword() == null ? "" : dto.getPassword().trim();
+
+        SysUser user = this.lambdaQuery()
+                .eq(SysUser::getUsername, username)
+                .one();
+
+        if (user == null || !user.getPassword().equals(password)) {
+            throw new RuntimeException("用户名或密码错误");
+        }
+
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getRole());
+
+        LoginVO vo = new LoginVO();
+        vo.setToken(token);
+        vo.setUserId(user.getId());
+        vo.setUsername(user.getUsername());
+        vo.setNickname(user.getNickname());
+        vo.setRole(user.getRole());
+        return vo;
     }
 
     /**

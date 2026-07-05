@@ -2,8 +2,10 @@ package com.dooralert.service;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
+import com.dooralert.dto.LoginDTO;
 import com.dooralert.dto.SysUserDTO;
 import com.dooralert.entity.SysUser;
+import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
 
 public interface SysUserService extends IService<SysUser> {
@@ -27,4 +29,9 @@ public interface SysUserService extends IService<SysUser> {
      * 修改用户
      */
     boolean updateUser(Long id, SysUserDTO dto);
+
+    /**
+     * 用户登录
+     */
+    LoginVO login(LoginDTO dto);
 }

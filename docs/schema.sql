@@ -60,9 +60,9 @@ CREATE TABLE `alert_log` (
 -- 基础测试数据
 -- ============================================================
 
--- 管理员账号（密码: admin123）
+-- 管理员账号（密码: 123456）
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', 'admin123', '系统管理员', 'admin'),
+('admin', '123456', '系统管理员', 'admin'),
 ('operator', 'operator123', '值班员张三', 'user');
 
 -- 测试设备

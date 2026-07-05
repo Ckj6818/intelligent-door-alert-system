@@ -16,3 +16,7 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+jwt:
+  secret: intelligent-door-alert-jwt-secret-key-2026-secure
+  expiration: 86400000

@@ -37,5 +37,6 @@ Thumbs.db
 *.pt
 temp_capture_*.jpg
 
-# Backend Uploads
+# Backend Uploads & Alert Images (never commit)
 uploads/
+door-alert-backend/uploads/

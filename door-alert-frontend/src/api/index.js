@@ -1,4 +1,14 @@
 import request from '@/utils/request'
+import { loginRequest } from '@/api/auth'
+
+/**
+ * 用户登录
+ * @param {Object} data - { username, password }
+ * @returns {Promise<{ token: string }>}
+ */
+export function login(data) {
+  return loginRequest(data)
+}
 
 /**
  * 获取设备列表（分页）

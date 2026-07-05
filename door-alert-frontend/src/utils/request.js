@@ -1,16 +1,23 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import router from '@/router'
 
-// 创建 axios 实例
 const service = axios.create({
   baseURL: '/api',
   timeout: 10000
 })
 
-// ==================== 请求拦截器 ====================
+const redirectToLogin = () => {
+  localStorage.removeItem('token')
+  if (router.currentRoute.value.path !== '/login') {
+    router.push('/login')
+  }
+}
+
+const isAuthRequest = (config) => config?.url?.includes('/users/login')
+
 service.interceptors.request.use(
   (config) => {
-    // 如果本地存储中有 token，则在请求头中携带
     const token = localStorage.getItem('token')
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`
@@ -23,41 +30,57 @@ service.interceptors.request.use(
   }
 )
 
-// ==================== 响应拦截器 ====================
 service.interceptors.response.use(
   (response) => {
     const res = response.data
 
-    // 后端统一返回格式 Result<T>: { code, msg, data }
-    // code === 200 表示业务成功
     if (res.code === 200) {
       return res.data
     }
 
-    // 业务异常，弹出后端返回的错误信息
-    ElMessage.error(res.msg || '请求失败，请稍后重试')
+    const message = res.message || res.msg || '请求失败，请稍后重试'
 
-    // 特殊状态码处理（如 401 未授权）
-    if (res.code === 401) {
-      // 可在此处做登出或跳转登录页的逻辑
-      console.warn('登录已过期，请重新登录')
+    if (res.code === 401 || res.code === 403) {
+      if (router.currentRoute.value.path !== '/login') {
+        ElMessage.warning('登录已过期，请重新登录')
+      }
+      redirectToLogin()
+      return Promise.reject(new Error(message))
     }
 
-    return Promise.reject(new Error(res.msg || '业务异常'))
+    ElMessage.error(message)
+    return Promise.reject(new Error(message))
   },
   (error) => {
-    // HTTP 层面的异常处理
     const status = error.response?.status
+    const config = error.config
+    const rawMsg = error.response?.data?.message || error.message || ''
     const messageMap = {
       400: '请求参数错误',
       401: '未授权，请重新登录',
-      403: '拒绝访问',
+      403: '拒绝访问，请重新登录',
       404: '请求资源不存在',
       500: '服务器内部错误',
       502: '网关错误',
       503: '服务不可用'
     }
-    const msg = messageMap[status] || `连接异常：${error.message}`
+    const msg = messageMap[status] || `连接异常：${rawMsg}`
+
+    if (rawMsg.includes('CORS') || rawMsg.includes('cors')) {
+      ElMessage.error('跨域请求被拒绝，请通过 http://localhost:5173 访问系统')
+      return Promise.reject(error)
+    }
+
+    if ((status === 401 || status === 403) && !isAuthRequest(config)) {
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
+    if ((status === 401 || status === 403) && isAuthRequest(config)) {
+      const serverMsg = error.response?.data?.message || '登录失败，请检查账号密码'
+      return Promise.reject(new Error(serverMsg))
+    }
+
     ElMessage.error(msg)
     return Promise.reject(error)
   }

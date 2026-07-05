@@ -11,6 +11,8 @@ export default defineConfig({
     }
   },
   server: {
+    port: 5173,
+    strictPort: true,
     proxy: {
       '/api/ws': {
         target: 'http://localhost:8081',

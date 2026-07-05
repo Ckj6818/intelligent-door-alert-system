@@ -2,8 +2,10 @@ package com.dooralert.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
+import com.dooralert.dto.LoginDTO;
 import com.dooralert.dto.SysUserDTO;
 import com.dooralert.service.SysUserService;
+import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +20,18 @@ public class SysUserController {
 
     @Autowired
     private SysUserService sysUserService;
+
+    /**
+     * 用户登录，返回 JWT Token
+     */
+    @PostMapping("/login")
+    public Result<LoginVO> login(@Valid @RequestBody LoginDTO dto) {
+        try {
+            return Result.success("登录成功", sysUserService.login(dto));
+        } catch (RuntimeException e) {
+            return Result.error(401, e.getMessage());
+        }
+    }
 
     /**
      * 分页查询用户列表
