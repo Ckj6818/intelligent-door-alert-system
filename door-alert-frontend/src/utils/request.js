@@ -8,16 +8,34 @@ const service = axios.create({
   timeout: 10000
 })
 
+const AUTH_REDIRECT_DELAY = 1500
+let redirectTimer = null
+
 const redirectToLogin = (message = '登录过期，请重新登录') => {
-  localStorage.removeItem('token')
-  clearUserInfo()
-  if (router.currentRoute.value.path !== '/login') {
-    ElMessage.warning(message)
-    router.push('/login')
-  }
+  if (redirectTimer) return
+
+  ElMessage.error(message)
+
+  redirectTimer = setTimeout(() => {
+    localStorage.removeItem('token')
+    clearUserInfo()
+    redirectTimer = null
+
+    if (router.currentRoute.value.path !== '/login') {
+      router.replace('/login')
+    }
+  }, AUTH_REDIRECT_DELAY)
 }
 
 const isAuthRequest = (config) => config?.url?.includes('/users/login')
+
+const handleAuthFailure = (message, config) => {
+  if (isAuthRequest(config)) {
+    return Promise.reject(new Error(message || '登录失败，请检查账号密码'))
+  }
+  redirectToLogin(message || '登录状态异常，请重新登录')
+  return Promise.reject(new Error(message))
+}
 
 service.interceptors.request.use(
   (config) => {
@@ -43,14 +61,8 @@ service.interceptors.response.use(
 
     const message = res.message || res.msg || '请求失败，请稍后重试'
 
-    if (res.code === 401) {
-      redirectToLogin('登录过期，请重新登录')
-      return Promise.reject(new Error(message))
-    }
-
-    if (res.code === 403) {
-      ElMessage.warning(message || '无此操作权限')
-      return Promise.reject(new Error(message))
+    if (res.code === 401 || res.code === 403) {
+      return handleAuthFailure(message, response.config)
     }
 
     ElMessage.error(message)
@@ -62,8 +74,8 @@ service.interceptors.response.use(
     const rawMsg = error.response?.data?.message || error.message || ''
     const messageMap = {
       400: '请求参数错误',
-      401: '未授权，请重新登录',
-      403: '拒绝访问',
+      401: '登录已过期，请重新登录',
+      403: '无此操作权限，请重新登录',
       404: '请求资源不存在',
       500: '服务器内部错误',
       502: '网关错误',
@@ -76,20 +88,12 @@ service.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (status === 401 && !isAuthRequest(config)) {
-      redirectToLogin('登录过期，请重新登录')
-      return Promise.reject(error)
-    }
-
-    if (status === 403 && !isAuthRequest(config)) {
-      const serverMsg = error.response?.data?.message || '无此操作权限'
-      ElMessage.warning(serverMsg)
-      return Promise.reject(error)
+    if ((status === 401 || status === 403) && !isAuthRequest(config)) {
+      return handleAuthFailure(rawMsg || msg, config)
     }
 
     if ((status === 401 || status === 403) && isAuthRequest(config)) {
-      const serverMsg = error.response?.data?.message || '登录失败，请检查账号密码'
-      return Promise.reject(new Error(serverMsg))
+      return Promise.reject(new Error(rawMsg || '登录失败，请检查账号密码'))
     }
 
     ElMessage.error(msg)

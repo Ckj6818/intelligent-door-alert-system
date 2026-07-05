@@ -1,17 +1,19 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
 import { getDeviceList, getAlertList, handleAlert, exportAlerts } from '@/api/index'
-import { hasPermission, getUserInfo, logout } from '@/utils/permission'
+import { getUserInfo, logout, USER_ROLE_KEY } from '@/utils/permission'
 
 const router = useRouter()
-const userRole = inject('userRole', computed(() => ''))
 
 const ORIGINAL_TITLE = '智能门禁安防管理大屏'
 const ALERT_TITLE = '【⚠️有新告警】'
+
+// 大屏 RBAC 角色：从 localStorage 读取，admin=ADMIN / security=OPERATOR
+const currentRole = ref(localStorage.getItem(USER_ROLE_KEY) || 'OPERATOR')
 
 // 数据状态
 const deviceList = ref([])
@@ -31,8 +33,8 @@ let deviceChart = null
 
 const imageBaseUrl = ''
 
-// RBAC：管理员完整权限；安保仅可处理告警，不可导出/管理设备
-const canHandle = computed(() => hasPermission('alert:handle'))
+// RBAC：安保可处理告警；管理员额外拥有导出与设备管理权限
+const canHandle = computed(() => currentRole.value === 'ADMIN' || currentRole.value === 'OPERATOR')
 const displayName = computed(() => {
   const user = getUserInfo()
   return user?.nickname || user?.username || '用户'
@@ -378,6 +380,8 @@ watch([alertList, deviceList], () => {
 }, { deep: true })
 
 onMounted(async () => {
+  // 每次进入大屏时同步最新角色，确保切换账号后权限立即生效
+  currentRole.value = localStorage.getItem(USER_ROLE_KEY) || 'OPERATOR'
   document.title = ORIGINAL_TITLE
   await fetchDashboardData()
   await nextTick()
@@ -497,7 +501,7 @@ onUnmounted(() => {
                   <div class="card-header">
                     <span>实时告警记录</span>
                   </div>
-                  <el-button v-if="userRole === 'ADMIN'" type="success" size="small" @click.stop="exportToExcel">
+                  <el-button v-if="currentRole === 'ADMIN'" type="success" size="small" @click.stop="exportToExcel">
                     导出为 Excel
                   </el-button>
                 </div>

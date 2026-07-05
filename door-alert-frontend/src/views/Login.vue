@@ -3,7 +3,7 @@ import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { login } from '@/api/index'
-import { clearUserInfo, saveUserInfo } from '@/utils/permission'
+import { clearUserInfo, saveUserInfo, saveUserRole } from '@/utils/permission'
 
 const router = useRouter()
 const loading = ref(false)
@@ -26,8 +26,9 @@ const onSubmit = async () => {
 
   loading.value = true
   try {
+    const username = form.username.trim()
     const data = await login({
-      username: form.username.trim(),
+      username,
       password: form.password.trim()
     })
     if (!data?.token) {
@@ -36,6 +37,8 @@ const onSubmit = async () => {
     }
     localStorage.setItem('token', data.token)
     saveUserInfo(data)
+    // 明确写入大屏角色，供 Dashboard 按钮权限隔离
+    saveUserRole({ ...data, username: data.username || username })
     ElMessage.success('登录成功')
     router.replace('/dashboard')
   } catch (error) {

@@ -1,6 +1,7 @@
 package com.dooralert.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
+import cn.dev33.satoken.annotation.SaCheckRole;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.AlertLogDTO;
@@ -35,10 +36,10 @@ public class AlertLogController {
     }
 
     /**
-     * 导出告警列表（仅拥有 alert:export 权限的管理员可访问）
+     * 导出告警列表（仅 ADMIN 管理员角色可访问，安保人员直连将返回 403）
      */
     @GetMapping("/export")
-    @SaCheckPermission("alert:export")
+    @SaCheckRole("ADMIN")
     public Result<List<AlertLogVO>> export() {
         return Result.success(alertLogService.listAllForExport());
     }
@@ -71,9 +72,10 @@ public class AlertLogController {
     }
 
     /**
-     * 删除告警
+     * 删除告警（仅 ADMIN 可执行）
      */
     @DeleteMapping("/{id}")
+    @SaCheckRole("ADMIN")
     public Result<Boolean> delete(@PathVariable Long id) {
         return Result.success(alertLogService.removeById(id));
     }
