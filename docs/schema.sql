@@ -63,6 +63,7 @@ CREATE TABLE `alert_log` (
 -- 管理员账号（密码: 123456）
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
 ('admin', '123456', '系统管理员', 'admin'),
+('security', '123456', '安保值班员', 'user'),
 ('operator', 'operator123', '值班员张三', 'user');
 
 -- 测试设备（前门 / 后门 / 侧门）

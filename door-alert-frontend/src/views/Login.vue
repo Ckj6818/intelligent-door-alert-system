@@ -3,6 +3,7 @@ import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { login } from '@/api/index'
+import { clearUserInfo, saveUserInfo } from '@/utils/permission'
 
 const router = useRouter()
 const loading = ref(false)
@@ -14,6 +15,7 @@ const form = reactive({
 
 onMounted(() => {
   localStorage.removeItem('token')
+  clearUserInfo()
 })
 
 const onSubmit = async () => {
@@ -33,6 +35,7 @@ const onSubmit = async () => {
       return
     }
     localStorage.setItem('token', data.token)
+    saveUserInfo(data)
     ElMessage.success('登录成功')
     router.replace('/dashboard')
   } catch (error) {
@@ -96,7 +99,7 @@ const onSubmit = async () => {
         </el-button>
       </el-form>
 
-      <div class="login-hint">默认账号：admin / 123456</div>
+      <div class="login-hint">管理员：admin / 123456　安保：security / 123456</div>
     </div>
   </div>
 </template>

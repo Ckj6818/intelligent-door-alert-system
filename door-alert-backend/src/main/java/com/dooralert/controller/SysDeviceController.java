@@ -1,5 +1,6 @@
 package com.dooralert.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.SysDeviceDTO;
@@ -42,6 +43,7 @@ public class SysDeviceController {
      * 新增设备
      */
     @PostMapping
+    @SaCheckPermission("device:manage")
     public Result<Boolean> add(@Valid @RequestBody SysDeviceDTO dto) {
         return Result.success(sysDeviceService.addDevice(dto));
     }
@@ -50,6 +52,7 @@ public class SysDeviceController {
      * 修改设备
      */
     @PutMapping("/{id}")
+    @SaCheckPermission("device:manage")
     public Result<Boolean> update(@PathVariable Long id, @Valid @RequestBody SysDeviceDTO dto) {
         return sysDeviceService.updateDevice(id, dto)
                 ? Result.success(true)
@@ -60,6 +63,7 @@ public class SysDeviceController {
      * 删除设备
      */
     @DeleteMapping("/{id}")
+    @SaCheckPermission("device:manage")
     public Result<Boolean> delete(@PathVariable Long id) {
         return Result.success(sysDeviceService.removeById(id));
     }

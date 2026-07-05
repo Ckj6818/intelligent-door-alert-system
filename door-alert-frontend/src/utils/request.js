@@ -1,15 +1,18 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '@/router'
+import { clearUserInfo } from '@/utils/permission'
 
 const service = axios.create({
   baseURL: '/api',
   timeout: 10000
 })
 
-const redirectToLogin = () => {
+const redirectToLogin = (message = '登录过期，请重新登录') => {
   localStorage.removeItem('token')
+  clearUserInfo()
   if (router.currentRoute.value.path !== '/login') {
+    ElMessage.warning(message)
     router.push('/login')
   }
 }
@@ -40,11 +43,13 @@ service.interceptors.response.use(
 
     const message = res.message || res.msg || '请求失败，请稍后重试'
 
-    if (res.code === 401 || res.code === 403) {
-      if (router.currentRoute.value.path !== '/login') {
-        ElMessage.warning('登录已过期，请重新登录')
-      }
-      redirectToLogin()
+    if (res.code === 401) {
+      redirectToLogin('登录过期，请重新登录')
+      return Promise.reject(new Error(message))
+    }
+
+    if (res.code === 403) {
+      ElMessage.warning(message || '无此操作权限')
       return Promise.reject(new Error(message))
     }
 
@@ -58,7 +63,7 @@ service.interceptors.response.use(
     const messageMap = {
       400: '请求参数错误',
       401: '未授权，请重新登录',
-      403: '拒绝访问，请重新登录',
+      403: '拒绝访问',
       404: '请求资源不存在',
       500: '服务器内部错误',
       502: '网关错误',
@@ -71,8 +76,14 @@ service.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if ((status === 401 || status === 403) && !isAuthRequest(config)) {
-      redirectToLogin()
+    if (status === 401 && !isAuthRequest(config)) {
+      redirectToLogin('登录过期，请重新登录')
+      return Promise.reject(error)
+    }
+
+    if (status === 403 && !isAuthRequest(config)) {
+      const serverMsg = error.response?.data?.message || '无此操作权限'
+      ElMessage.warning(serverMsg)
       return Promise.reject(error)
     }
 

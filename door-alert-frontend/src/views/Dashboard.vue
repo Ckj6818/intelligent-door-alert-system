@@ -1,9 +1,14 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
-import { getDeviceList, getAlertList, handleAlert } from '@/api/index'
+import { getDeviceList, getAlertList, handleAlert, exportAlerts } from '@/api/index'
+import { hasPermission, getUserInfo, logout } from '@/utils/permission'
+
+const router = useRouter()
+const userRole = inject('userRole', computed(() => ''))
 
 const ORIGINAL_TITLE = '智能门禁安防管理大屏'
 const ALERT_TITLE = '【⚠️有新告警】'
@@ -25,6 +30,13 @@ let dangerChart = null
 let deviceChart = null
 
 const imageBaseUrl = ''
+
+// RBAC：管理员完整权限；安保仅可处理告警，不可导出/管理设备
+const canHandle = computed(() => hasPermission('alert:handle'))
+const displayName = computed(() => {
+  const user = getUserInfo()
+  return user?.nickname || user?.username || '用户'
+})
 
 const resolveImageUrl = (imageUrl) => {
   if (!imageUrl || !imageUrl.startsWith('/uploads/')) return ''
@@ -308,25 +320,30 @@ const getDangerLevelText = (level) => {
   return 'SAFE'
 }
 
-const exportToExcel = () => {
-  if (!alertList.value.length) {
-    ElMessage.warning('暂无告警数据可导出')
-    return
+const exportToExcel = async () => {
+  try {
+    const records = await exportAlerts()
+    if (!records?.length) {
+      ElMessage.warning('暂无告警数据可导出')
+      return
+    }
+
+    const rows = records.map((item) => ({
+      告警时间: formatTime(item.createTime),
+      设备ID: item.deviceId,
+      接近度: item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
+      危险等级: getDangerLevelText(item.dangerLevel),
+      状态: item.status === 1 ? '已处理' : '未处理'
+    }))
+
+    const worksheet = XLSX.utils.json_to_sheet(rows)
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录')
+    XLSX.writeFile(workbook, '智能门禁告警报表.xlsx')
+    ElMessage.success('报表导出成功')
+  } catch (error) {
+    console.error('导出失败', error)
   }
-
-  const rows = alertList.value.map((item) => ({
-    告警时间: formatTime(item.createTime),
-    设备ID: item.deviceId,
-    接近度: item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
-    危险等级: getDangerLevelText(item.dangerLevel),
-    状态: item.status === 1 ? '已处理' : '未处理'
-  }))
-
-  const worksheet = XLSX.utils.json_to_sheet(rows)
-  const workbook = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录')
-  XLSX.writeFile(workbook, '智能门禁告警报表.xlsx')
-  ElMessage.success('报表导出成功')
 }
 
 const onHandleAlert = async (id) => {
@@ -346,6 +363,14 @@ const onHandleAlert = async (id) => {
 
 const onDashboardClick = () => {
   stopTitleBlink()
+}
+
+const onLogout = () => {
+  closeWebSocket()
+  stopTitleBlink()
+  logout()
+  ElMessage.success('已退出登录')
+  router.replace('/login')
 }
 
 watch([alertList, deviceList], () => {
@@ -380,6 +405,12 @@ onUnmounted(() => {
     <el-container class="dashboard-container">
       <el-header class="dashboard-header">
         <div class="header-glow"></div>
+        <div class="header-actions">
+          <span class="header-user">{{ displayName }}</span>
+          <el-button class="logout-btn" size="small" @click.stop="onLogout">
+            退出登录
+          </el-button>
+        </div>
         <h1 class="header-title">智能门禁安防管理大屏</h1>
         <div class="header-subtitle">INTELLIGENT DOOR ALERT COMMAND CENTER</div>
       </el-header>
@@ -466,7 +497,7 @@ onUnmounted(() => {
                   <div class="card-header">
                     <span>实时告警记录</span>
                   </div>
-                  <el-button type="success" size="small" @click.stop="exportToExcel">
+                  <el-button v-if="userRole === 'ADMIN'" type="success" size="small" @click.stop="exportToExcel">
                     导出为 Excel
                   </el-button>
                 </div>
@@ -521,7 +552,7 @@ onUnmounted(() => {
                 <el-table-column label="操作" width="100" align="center" fixed="right">
                   <template #default="scope">
                     <el-button
-                      v-if="scope.row.status !== 1"
+                      v-if="canHandle && scope.row.status !== 1"
                       type="primary"
                       size="small"
                       @click.stop="onHandleAlert(scope.row.id)"
@@ -585,6 +616,36 @@ body {
   height: 2px;
   background: linear-gradient(90deg, transparent, #3b82f6, #60a5fa, #3b82f6, transparent);
   box-shadow: 0 0 12px rgba(59, 130, 246, 0.8);
+}
+
+.header-actions {
+  position: absolute;
+  right: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 2;
+}
+
+.header-user {
+  font-size: 13px;
+  color: #94a3b8;
+  letter-spacing: 1px;
+}
+
+.logout-btn {
+  border: 1px solid #334155 !important;
+  background: rgba(20, 28, 52, 0.75) !important;
+  color: #e2e8f0 !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.logout-btn:hover {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.35);
+  color: #f8fafc !important;
 }
 
 .header-title {

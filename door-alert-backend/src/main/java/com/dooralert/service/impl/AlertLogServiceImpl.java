@@ -13,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+import java.util.stream.Collectors;
+
 @Slf4j
 @Service
 public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> implements AlertLogService {
@@ -110,6 +113,14 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
                 entity.getId(), entity.getDeviceId(), entity.getDangerLevel());
 
         return toVO(entity);
+    }
+
+    @Override
+    public List<AlertLogVO> listAllForExport() {
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.orderByDesc(AlertLog::getCreateTime);
+        return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
     }
 
     private AlertLogVO toVO(AlertLog entity) {

@@ -8,18 +8,15 @@ import com.dooralert.dto.SysUserDTO;
 import com.dooralert.entity.SysUser;
 import com.dooralert.mapper.SysUserMapper;
 import com.dooralert.service.SysUserService;
-import com.dooralert.util.JwtUtil;
+import com.dooralert.satoken.RbacHelper;
 import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
+import cn.dev33.satoken.stp.StpUtil;
 import org.springframework.beans.BeanUtils;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
-
-    @Autowired
-    private JwtUtil jwtUtil;
 
     @Override
     public IPage<SysUserVO> pageUsers(long current, long size) {
@@ -64,7 +61,9 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new RuntimeException("用户名或密码错误");
         }
 
-        String token = jwtUtil.generateToken(user.getId(), user.getUsername(), user.getRole());
+        // Sa-Token JWT 登录：loginId 使用用户主键，便于 RBAC 权限加载
+        StpUtil.login(user.getId());
+        String token = StpUtil.getTokenValue();
 
         LoginVO vo = new LoginVO();
         vo.setToken(token);
@@ -72,6 +71,8 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         vo.setUsername(user.getUsername());
         vo.setNickname(user.getNickname());
         vo.setRole(user.getRole());
+        vo.setRoles(RbacHelper.getRoles(user));
+        vo.setPermissions(RbacHelper.getPermissions(user));
         return vo;
     }
 

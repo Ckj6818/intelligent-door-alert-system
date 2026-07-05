@@ -17,6 +17,14 @@ mybatis-plus:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
 
-jwt:
-  secret: intelligent-door-alert-jwt-secret-key-2026-secure
-  expiration: 86400000
+# Sa-Token 权限认证配置（JWT 无状态模式）
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  timeout: 86400
+  active-timeout: -1
+  is-concurrent: true
+  is-share: false
+  is-read-header: true
+  is-read-cookie: false
+  jwt-secret-key: intelligent-door-alert-sa-token-jwt-secret-2026-secure

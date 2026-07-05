@@ -15,9 +15,10 @@ INSERT IGNORE INTO `sys_device` (`id`, `device_name`, `location`, `status`) VALU
 (2, '后门摄像头-B01', '1号楼后门通道', 1),
 (3, '侧门摄像头-C01', '2号楼侧门', 0);
 
--- 确保管理员账号存在（admin / 123456）
+-- 确保管理员与安保账号存在
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', '123456', '系统管理员', 'admin')
+('admin', '123456', '系统管理员', 'admin'),
+('security', '123456', '安保值班员', 'user')
 ON DUPLICATE KEY UPDATE
     `password` = VALUES(`password`),
     `nickname` = VALUES(`nickname`),

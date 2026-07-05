@@ -37,6 +37,16 @@ export function getAlertList(params) {
 }
 
 /**
+ * 导出告警列表（需 alert:export 权限）
+ */
+export function exportAlerts() {
+  return request({
+    url: '/alerts/export',
+    method: 'get'
+  })
+}
+
+/**
  * 处理告警（将 status 从 0 更新为 1）
  * @param {number} id - 告警记录主键 ID
  * @returns {Promise}

@@ -1,5 +1,6 @@
 package com.dooralert.controller;
 
+import cn.dev33.satoken.annotation.SaCheckPermission;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.AlertLogDTO;
@@ -10,6 +11,8 @@ import com.dooralert.ws.AlertWebSocketServer;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * 告警日志管理接口
@@ -29,6 +32,15 @@ public class AlertLogController {
             @RequestParam(defaultValue = "1") long current,
             @RequestParam(defaultValue = "10") long size) {
         return Result.success(alertLogService.pageAlerts(current, size));
+    }
+
+    /**
+     * 导出告警列表（仅拥有 alert:export 权限的管理员可访问）
+     */
+    @GetMapping("/export")
+    @SaCheckPermission("alert:export")
+    public Result<List<AlertLogVO>> export() {
+        return Result.success(alertLogService.listAllForExport());
     }
 
     /**
@@ -70,6 +82,7 @@ public class AlertLogController {
      * 处理告警：将 status 从 0（未处理）更新为 1（已处理）
      */
     @PutMapping("/{id}/handle")
+    @SaCheckPermission("alert:handle")
     public Result<Boolean> handle(@PathVariable Long id) {
         return alertLogService.handleAlert(id)
                 ? Result.success("告警已处理", true)
@@ -77,7 +90,7 @@ public class AlertLogController {
     }
 
     // ==========================================================
-    //  AI 边缘端专属上报接口（供 Python 机器视觉脚本调用）
+    //  AI 边缘端专属上报接口（供 Python 机器视觉脚本调用，免登录）
     // ==========================================================
 
     /**
@@ -86,9 +99,6 @@ public class AlertLogController {
      * Python 端通过 POST 请求将检测到的告警信息推送至此接口。
      * 系统自动将处理状态设为 0（未处理）并持久化。
      * </p>
-     *
-     * @param dto 告警上报数据（含 JSR-303 校验）
-     * @return 入库后的告警 VO 信息
      */
     @PostMapping("/upload")
     public Result<AlertLogVO> upload(
@@ -101,7 +111,7 @@ public class AlertLogController {
             dto.setDeviceId(deviceId);
             dto.setProximityRatio(proximityRatio);
             dto.setDangerLevel(dangerLevel);
-            
+
             AlertLogVO vo = alertLogService.uploadAlert(dto, file);
             AlertWebSocketServer.sendAlertNotification(vo);
             return Result.success("告警上报成功", vo);
