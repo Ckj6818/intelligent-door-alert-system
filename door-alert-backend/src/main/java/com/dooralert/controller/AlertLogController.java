@@ -65,6 +65,16 @@ public class AlertLogController {
         return Result.success(alertLogService.removeById(id));
     }
 
+    /**
+     * 处理告警：将 status 从 0（未处理）更新为 1（已处理）
+     */
+    @PutMapping("/{id}/handle")
+    public Result<Boolean> handle(@PathVariable Long id) {
+        return alertLogService.handleAlert(id)
+                ? Result.success("告警已处理", true)
+                : Result.error("告警记录不存在或处理失败");
+    }
+
     // ==========================================================
     //  AI 边缘端专属上报接口（供 Python 机器视觉脚本调用）
     // ==========================================================

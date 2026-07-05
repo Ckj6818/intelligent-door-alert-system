@@ -19,6 +19,7 @@ UPLOAD_COOLDOWN = 2.0
 
 
 import os
+import traceback
 
 def upload_alert_async(payload, image_path):
     """
@@ -32,14 +33,19 @@ def upload_alert_async(payload, image_path):
             # 发送 HTTP POST 请求
             response = requests.post(BACKEND_UPLOAD_URL, data=payload, files=files, timeout=5)
             
+        # 不论成功还是失败，强制打印后端的响应状态和内容
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 云端响应状态码: {response.status_code}, 响应内容: {response.text}")
+        
         if response.status_code == 200:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] 数据上报云端成功！响应: {response.json()}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [INFO] 数据上报云端成功！")
         else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，后端返回状态码: {response.status_code}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，请检查后端报错信息")
     except requests.exceptions.RequestException as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，请检查后端服务是否启动或网络是否连通")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败(网络异常/超时):")
+        traceback.print_exc()
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] 上报过程出现异常: {str(e)}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [ERROR] 上报过程出现未知异常:")
+        traceback.print_exc()
     finally:
         # 上报完成后，清理临时图片文件
         if os.path.exists(image_path):
@@ -121,6 +127,7 @@ def main():
                             # 保存当前视频帧为临时图片
                             temp_image_path = f"temp_capture_{int(current_time)}.jpg"
                             cv2.imwrite(temp_image_path, frame)
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] 图片抓拍成功，准备上传...")
                             
                             # 组装参数 payload，移除 imageUrl（将由文件形式上传）
                             danger_level_int = 3 if proximity_ratio >= 0.4 else 2

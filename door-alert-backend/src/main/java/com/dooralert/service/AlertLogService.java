@@ -18,6 +18,11 @@ public interface AlertLogService extends IService<AlertLog> {
     boolean updateAlert(Long id, AlertLogDTO dto);
 
     /**
+     * 将告警标记为已处理（status: 0 -> 1）
+     */
+    boolean handleAlert(Long id);
+
+    /**
      * 边缘端上报告警（供 Python 视觉脚本调用）
      */
     AlertLogVO uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);

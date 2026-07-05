@@ -25,3 +25,15 @@ export function getAlertList(params) {
     params
   })
 }
+
+/**
+ * 处理告警（将 status 从 0 更新为 1）
+ * @param {number} id - 告警记录主键 ID
+ * @returns {Promise}
+ */
+export function handleAlert(id) {
+  return request({
+    url: `/alerts/${id}/handle`,
+    method: 'put'
+  })
+}

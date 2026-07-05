@@ -1,10 +1,20 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { getDeviceList, getAlertList } from '@/api/index'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { getDeviceList, getAlertList, handleAlert } from '@/api/index'
 
 // 数据状态
 const deviceList = ref([])
 const alertList = ref([])
+let alertTimer = null // 定时器引用
+
+// 通过 Vite 代理访问后端静态图片，避免跨域问题
+const imageBaseUrl = ''
+
+const resolveImageUrl = (imageUrl) => {
+  if (!imageUrl || !imageUrl.startsWith('/uploads/')) return ''
+  return imageBaseUrl + imageUrl
+}
 
 // 获取设备列表
 const fetchDeviceList = async () => {
@@ -20,7 +30,11 @@ const fetchDeviceList = async () => {
 const fetchAlertList = async () => {
   try {
     const res = await getAlertList({ current: 1, size: 50 })
-    alertList.value = res.records || []
+    const records = res.records || []
+    // 确保最新告警排在前面（兼容旧版后端未按时间倒序的情况）
+    alertList.value = records.sort(
+      (a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime()
+    )
   } catch (error) {
     console.error('获取告警记录失败', error)
   }
@@ -32,9 +46,32 @@ const formatTime = (timeStr) => {
   return new Date(timeStr).toLocaleString()
 }
 
+// 处理告警
+const onHandleAlert = async (id) => {
+  try {
+    await handleAlert(id)
+    ElMessage.success('告警已处理')
+    await fetchAlertList()
+  } catch (error) {
+    console.error('处理告警失败', error)
+  }
+}
+
 onMounted(() => {
   fetchDeviceList()
   fetchAlertList()
+  
+  // 每隔 3 秒自动轮询最新的告警记录列表
+  alertTimer = setInterval(() => {
+    fetchAlertList()
+  }, 3000)
+})
+
+onUnmounted(() => {
+  // 销毁组件时清除定时器，避免内存泄漏
+  if (alertTimer) {
+    clearInterval(alertTimer)
+  }
 })
 </script>
 
@@ -93,13 +130,17 @@ onMounted(() => {
                 <el-table-column label="抓拍图片" width="100" align="center">
                   <template #default="scope">
                     <el-image
-                      v-if="scope.row.imageUrl"
+                      v-if="resolveImageUrl(scope.row.imageUrl)"
                       style="width: 50px; height: 50px; border-radius: 4px;"
-                      :src="`http://localhost:8081${scope.row.imageUrl}`"
-                      :preview-src-list="[`http://localhost:8081${scope.row.imageUrl}`]"
+                      :src="resolveImageUrl(scope.row.imageUrl)"
+                      :preview-src-list="[resolveImageUrl(scope.row.imageUrl)]"
                       fit="cover"
                       hide-on-click-modal
-                    />
+                    >
+                      <template #error>
+                        <span class="empty-img">无图</span>
+                      </template>
+                    </el-image>
                     <span v-else class="empty-img">-</span>
                   </template>
                 </el-table-column>
@@ -125,6 +166,19 @@ onMounted(() => {
                     >
                       {{ scope.row.status === 1 ? '已处理' : '未处理' }}
                     </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="100" align="center" fixed="right">
+                  <template #default="scope">
+                    <el-button
+                      v-if="scope.row.status !== 1"
+                      type="primary"
+                      size="small"
+                      @click="onHandleAlert(scope.row.id)"
+                    >
+                      处理
+                    </el-button>
+                    <span v-else class="empty-img">-</span>
                   </template>
                 </el-table-column>
               </el-table>
