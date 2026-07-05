@@ -11,10 +11,12 @@ const ALERT_TITLE = '【⚠️有新告警】'
 // 数据状态
 const deviceList = ref([])
 const alertList = ref([])
-let alertTimer = null
 let maxAlertId = 0
 let titleBlinkTimer = null
 let isTitleBlinking = false
+let alertSocket = null
+let wsReconnectTimer = null
+const WS_RECONNECT_DELAY = 3000
 
 // 图表 DOM 引用与实例
 const dangerChartRef = ref(null)
@@ -98,17 +100,88 @@ const speakHighAlert = () => {
 const checkNewHighAlerts = (records) => {
   if (!records.length) return
 
-  const newHighAlerts = records.filter(
-    (item) => item.id > maxAlertId && item.dangerLevel >= 3
-  )
   const newMaxId = Math.max(...records.map((item) => item.id))
+  maxAlertId = newMaxId
+}
 
-  if (maxAlertId > 0 && newHighAlerts.length > 0) {
+const getWebSocketUrl = () => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/api/ws/alerts`
+}
+
+const handleWsAlert = (newAlert) => {
+  if (!newAlert?.id) return
+  if (alertList.value.some((item) => item.id === newAlert.id)) return
+
+  alertList.value.unshift(newAlert)
+
+  if (newAlert.id > maxAlertId) {
+    maxAlertId = newAlert.id
+  }
+
+  if (newAlert.dangerLevel >= 3) {
     speakHighAlert()
     startTitleBlink()
   }
 
-  maxAlertId = newMaxId
+  updateCharts()
+}
+
+const initWebSocket = () => {
+  const connect = () => {
+    if (alertSocket?.readyState === WebSocket.OPEN || alertSocket?.readyState === WebSocket.CONNECTING) {
+      return
+    }
+
+    try {
+      alertSocket = new WebSocket(getWebSocketUrl())
+
+      alertSocket.onopen = () => {
+        console.log('WebSocket 已连接')
+        if (wsReconnectTimer) {
+          clearTimeout(wsReconnectTimer)
+          wsReconnectTimer = null
+        }
+      }
+
+      alertSocket.onmessage = (event) => {
+        try {
+          const newAlert = JSON.parse(event.data)
+          handleWsAlert(newAlert)
+        } catch (error) {
+          console.error('解析 WebSocket 告警消息失败', error)
+        }
+      }
+
+      alertSocket.onclose = () => {
+        console.warn('WebSocket 已断开，准备重连...')
+        alertSocket = null
+        wsReconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY)
+      }
+
+      alertSocket.onerror = (error) => {
+        console.error('WebSocket 连接异常', error)
+        alertSocket?.close()
+      }
+    } catch (error) {
+      console.error('WebSocket 初始化失败', error)
+      wsReconnectTimer = setTimeout(connect, WS_RECONNECT_DELAY)
+    }
+  }
+
+  connect()
+}
+
+const closeWebSocket = () => {
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer)
+    wsReconnectTimer = null
+  }
+  if (alertSocket) {
+    alertSocket.onclose = null
+    alertSocket.close()
+    alertSocket = null
+  }
 }
 
 const initCharts = () => {
@@ -261,7 +334,10 @@ const onHandleAlert = async (id) => {
   try {
     await handleAlert(id)
     ElMessage.success('告警已处理')
-    await fetchAlertList()
+    const target = alertList.value.find((item) => item.id === id)
+    if (target) {
+      target.status = 1
+    }
     updateCharts()
   } catch (error) {
     console.error('处理告警失败', error)
@@ -284,14 +360,11 @@ onMounted(async () => {
     initCharts()
   })
   window.addEventListener('resize', handleResize)
-
-  alertTimer = setInterval(() => {
-    fetchDashboardData()
-  }, 3000)
+  initWebSocket()
 })
 
 onUnmounted(() => {
-  if (alertTimer) clearInterval(alertTimer)
+  closeWebSocket()
   stopTitleBlink()
   window.speechSynthesis?.cancel()
   window.removeEventListener('resize', handleResize)

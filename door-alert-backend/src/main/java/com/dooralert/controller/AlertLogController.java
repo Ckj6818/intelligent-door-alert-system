@@ -6,6 +6,7 @@ import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.service.AlertLogService;
 import com.dooralert.vo.AlertLogVO;
+import com.dooralert.ws.AlertWebSocketServer;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
@@ -102,6 +103,7 @@ public class AlertLogController {
             dto.setDangerLevel(dangerLevel);
             
             AlertLogVO vo = alertLogService.uploadAlert(dto, file);
+            AlertWebSocketServer.sendAlertNotification(vo);
             return Result.success("告警上报成功", vo);
         } catch (Exception e) {
             e.printStackTrace();
