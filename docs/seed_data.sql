@@ -15,14 +15,19 @@ INSERT IGNORE INTO `sys_device` (`id`, `device_name`, `location`, `status`) VALU
 (2, '后门摄像头-B01', '1号楼后门通道', 1),
 (3, '侧门摄像头-C01', '2号楼侧门', 0);
 
--- 确保管理员与安保账号存在
+-- 确保管理员与安保账号存在，并统一角色枚举为 ADMIN / OPERATOR
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', '123456', '系统管理员', 'admin'),
-('security', '123456', '安保值班员', 'user')
+('admin', '123456', '系统管理员', 'ADMIN'),
+('security', '123456', '安保值班员', 'OPERATOR')
 ON DUPLICATE KEY UPDATE
     `password` = VALUES(`password`),
     `nickname` = VALUES(`nickname`),
     `role` = VALUES(`role`);
+
+-- 将历史数据中的旧角色值迁移为新枚举
+UPDATE `sys_user` SET `role` = 'ADMIN' WHERE `username` = 'admin';
+UPDATE `sys_user` SET `role` = 'OPERATOR' WHERE `username` IN ('security', 'operator');
+UPDATE `sys_user` SET `role` = 'OPERATOR' WHERE `role` IN ('user', 'admin') AND `username` <> 'admin';
 
 -- 批量注入 55 条高质量历史告警
 INSERT INTO `alert_log` (`device_id`, `image_url`, `proximity_ratio`, `danger_level`, `status`, `create_time`)

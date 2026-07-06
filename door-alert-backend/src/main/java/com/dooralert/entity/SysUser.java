@@ -24,6 +24,7 @@ public class SysUser {
     @TableField("nickname")
     private String nickname;
 
+    /** 角色枚举：ADMIN（管理员）/ OPERATOR（安保值班员） */
     @TableField("role")
     private String role;
 

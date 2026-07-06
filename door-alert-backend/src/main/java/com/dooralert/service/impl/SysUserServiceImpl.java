@@ -61,7 +61,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new RuntimeException("用户名或密码错误");
         }
 
-        // Sa-Token JWT 登录：loginId 使用用户主键，便于 RBAC 权限加载
+        // Sa-Token JWT 登录：loginId 使用用户主键，会话与 RBAC 均按数据库角色加载
         StpUtil.login(user.getId());
         String token = StpUtil.getTokenValue();
 
@@ -70,6 +70,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         vo.setUserId(user.getId());
         vo.setUsername(user.getUsername());
         vo.setNickname(user.getNickname());
+        // 返回数据库真实角色：ADMIN / OPERATOR
         vo.setRole(user.getRole());
         vo.setRoles(RbacHelper.getRoles(user));
         vo.setPermissions(RbacHelper.getPermissions(user));

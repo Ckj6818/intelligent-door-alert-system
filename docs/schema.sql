@@ -20,7 +20,7 @@ CREATE TABLE `sys_user` (
     `username`    VARCHAR(50)  NOT NULL                COMMENT '登录账号',
     `password`    VARCHAR(100) NOT NULL                COMMENT '登录密码（密文）',
     `nickname`    VARCHAR(50)  DEFAULT NULL            COMMENT '用户昵称',
-    `role`        VARCHAR(20)  NOT NULL DEFAULT 'user' COMMENT '角色（admin-管理员, user-普通用户）',
+    `role`        VARCHAR(20)  NOT NULL DEFAULT 'OPERATOR' COMMENT '角色: ADMIN / OPERATOR',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_username` (`username`)
@@ -62,9 +62,9 @@ CREATE TABLE `alert_log` (
 
 -- 管理员账号（密码: 123456）
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', '123456', '系统管理员', 'admin'),
-('security', '123456', '安保值班员', 'user'),
-('operator', 'operator123', '值班员张三', 'user');
+('admin', '123456', '系统管理员', 'ADMIN'),
+('security', '123456', '安保值班员', 'OPERATOR'),
+('operator', 'operator123', '值班员张三', 'OPERATOR');
 
 -- 测试设备（前门 / 后门 / 侧门）
 INSERT INTO `sys_device` (`device_name`, `location`, `status`) VALUES

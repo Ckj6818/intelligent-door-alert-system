@@ -15,7 +15,10 @@ public class LoginVO {
 
     private String nickname;
 
-    /** 数据库原始角色字段 */
+    /**
+     * 用户角色（来自数据库 sys_user.role 真实值）
+     * 枚举：ADMIN / OPERATOR
+     */
     private String role;
 
     /** Sa-Token RBAC 角色列表，如 ADMIN / OPERATOR */
