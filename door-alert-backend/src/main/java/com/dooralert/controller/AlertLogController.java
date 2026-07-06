@@ -2,6 +2,7 @@ package com.dooralert.controller;
 
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.annotation.SaCheckRole;
+import cn.dev33.satoken.annotation.SaMode;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.AlertLogDTO;
@@ -81,9 +82,10 @@ public class AlertLogController {
     }
 
     /**
-     * 处理告警：ADMIN / OPERATOR 均可执行（OPERATOR 通过 alert:handle 权限校验）
+     * 处理告警：ADMIN / OPERATOR 均可执行（安保核心职责）
      */
     @PutMapping("/{id}/handle")
+    @SaCheckRole(value = {"ADMIN", "OPERATOR"}, mode = SaMode.OR)
     @SaCheckPermission("alert:handle")
     public Result<Boolean> handle(@PathVariable Long id) {
         return alertLogService.handleAlert(id)

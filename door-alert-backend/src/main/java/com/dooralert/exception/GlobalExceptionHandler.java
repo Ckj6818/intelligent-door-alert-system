@@ -20,11 +20,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(NotPermissionException.class)
     public Result<Void> handleNotPermission(NotPermissionException e) {
-        return Result.error(403, "权限不足，拒绝访问");
+        return Result.error(403, "权限不足，拒绝访问！");
     }
 
     @ExceptionHandler(NotRoleException.class)
     public Result<Void> handleNotRole(NotRoleException e) {
-        return Result.error(403, "权限不足，拒绝访问");
+        return Result.error(403, "权限不足，拒绝访问！");
     }
 }

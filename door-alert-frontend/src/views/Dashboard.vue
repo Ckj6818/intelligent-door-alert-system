@@ -445,8 +445,8 @@ const getRoleLabel = (role) => {
 const fetchOperatorList = async () => {
   userLoading.value = true
   try {
-    const res = await getUserList({ current: 1, size: 100, role: 'OPERATOR' })
-    operatorList.value = res.records || []
+    const res = await getUserList()
+    operatorList.value = Array.isArray(res) ? res : (res?.records || [])
   } catch (error) {
     console.error('获取安保人员列表失败', error)
   } finally {

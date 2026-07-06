@@ -65,19 +65,18 @@ export function handleAlert(id) {
   })
 }
 
-/** 获取用户列表（管理员专属，可按 role 过滤） */
-export function getUserList(params) {
+/** 获取安保人员列表（管理员专属） */
+export function getUserList() {
   return request({
-    url: '/users',
-    method: 'get',
-    params
+    url: '/sys-user/list',
+    method: 'get'
   })
 }
 
 /** 新增安保账号（管理员专属） */
 export function addOperatorUser(data) {
   return request({
-    url: '/users',
+    url: '/sys-user/add',
     method: 'post',
     data
   })
@@ -86,7 +85,7 @@ export function addOperatorUser(data) {
 /** 删除安保账号（管理员专属） */
 export function deleteOperatorUser(id) {
   return request({
-    url: `/users/${id}`,
+    url: `/sys-user/delete/${id}`,
     method: 'delete'
   })
 }
@@ -94,7 +93,7 @@ export function deleteOperatorUser(id) {
 /** 重置安保密码为 123456（管理员专属） */
 export function resetOperatorPassword(id) {
   return request({
-    url: `/users/${id}/reset-password`,
-    method: 'put'
+    url: `/sys-user/reset-password/${id}`,
+    method: 'post'
   })
 }

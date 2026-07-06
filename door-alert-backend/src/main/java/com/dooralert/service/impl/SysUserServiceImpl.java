@@ -1,8 +1,5 @@
 package com.dooralert.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.dooralert.dto.LoginDTO;
 import com.dooralert.dto.SysUserDTO;
@@ -15,18 +12,20 @@ import com.dooralert.vo.SysUserVO;
 import cn.dev33.satoken.stp.StpUtil;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
 
     @Override
-    public IPage<SysUserVO> pageUsers(long current, long size, String role) {
-        Page<SysUser> page = new Page<>(current, size);
-        LambdaQueryWrapper<SysUser> wrapper = new LambdaQueryWrapper<>();
-        if (role != null && !role.isBlank()) {
-            wrapper.eq(SysUser::getRole, role.trim().toUpperCase());
-        }
-        wrapper.orderByDesc(SysUser::getCreateTime);
-        return this.page(page, wrapper).convert(this::toVO);
+    public List<SysUserVO> listOperators() {
+        return this.lambdaQuery()
+                .eq(SysUser::getRole, RbacHelper.ROLE_OPERATOR)
+                .orderByDesc(SysUser::getCreateTime)
+                .list()
+                .stream()
+                .map(this::toVO)
+                .toList();
     }
 
     @Override
