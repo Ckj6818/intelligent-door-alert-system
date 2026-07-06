@@ -46,6 +46,13 @@ export function exportAlerts() {
   })
 }
 
+export function deleteDevice(id) {
+  return request({
+    url: `/devices/${id}`,
+    method: 'delete'
+  })
+}
+
 /**
  * 处理告警（将 status 从 0 更新为 1）
  * @param {number} id - 告警记录主键 ID
@@ -54,6 +61,40 @@ export function exportAlerts() {
 export function handleAlert(id) {
   return request({
     url: `/alerts/${id}/handle`,
+    method: 'put'
+  })
+}
+
+/** 获取用户列表（管理员专属，可按 role 过滤） */
+export function getUserList(params) {
+  return request({
+    url: '/users',
+    method: 'get',
+    params
+  })
+}
+
+/** 新增安保账号（管理员专属） */
+export function addOperatorUser(data) {
+  return request({
+    url: '/users',
+    method: 'post',
+    data
+  })
+}
+
+/** 删除安保账号（管理员专属） */
+export function deleteOperatorUser(id) {
+  return request({
+    url: `/users/${id}`,
+    method: 'delete'
+  })
+}
+
+/** 重置安保密码为 123456（管理员专属） */
+export function resetOperatorPassword(id) {
+  return request({
+    url: `/users/${id}/reset-password`,
     method: 'put'
   })
 }

@@ -81,7 +81,7 @@ public class AlertLogController {
     }
 
     /**
-     * 处理告警：将 status 从 0（未处理）更新为 1（已处理）
+     * 处理告警：ADMIN / OPERATOR 均可执行（OPERATOR 通过 alert:handle 权限校验）
      */
     @PutMapping("/{id}/handle")
     @SaCheckPermission("alert:handle")

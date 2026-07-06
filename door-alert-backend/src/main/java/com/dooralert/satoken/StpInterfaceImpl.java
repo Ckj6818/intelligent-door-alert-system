@@ -27,11 +27,7 @@ public class StpInterfaceImpl implements StpInterface {
     @Override
     public List<String> getRoleList(Object loginId, String loginType) {
         SysUser user = loadUser(loginId);
-        if (user == null || user.getRole() == null || user.getRole().isBlank()) {
-            return Collections.emptyList();
-        }
-        // 直接返回数据库中的真实角色值（ADMIN / OPERATOR）
-        return List.of(user.getRole().trim().toUpperCase());
+        return RbacHelper.getRoles(user);
     }
 
     private SysUser loadUser(Object loginId) {

@@ -1,19 +1,33 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as echarts from 'echarts'
 import * as XLSX from 'xlsx'
-import { getDeviceList, getAlertList, handleAlert, exportAlerts } from '@/api/index'
-import { getUserInfo, logout, USER_ROLE_KEY } from '@/utils/permission'
+import {
+  getDeviceList,
+  getAlertList,
+  handleAlert,
+  exportAlerts,
+  deleteDevice,
+  getUserList,
+  addOperatorUser,
+  deleteOperatorUser,
+  resetOperatorPassword
+} from '@/api/index'
+import { getUserInfo, logout } from '@/utils/permission'
 
 const router = useRouter()
 
 const ORIGINAL_TITLE = '智能门禁安防管理大屏'
 const ALERT_TITLE = '【⚠️有新告警】'
 
-// 大屏 RBAC 角色：从 localStorage 读取，admin=ADMIN / security=OPERATOR
-const currentRole = ref(localStorage.getItem(USER_ROLE_KEY) || 'OPERATOR')
+// 大屏 RBAC：从 localStorage 读取后端返回的真实角色 ADMIN / OPERATOR
+const currentRole = ref(localStorage.getItem('user_role') || 'OPERATOR')
+const isAdmin = computed(() => currentRole.value === 'ADMIN')
+const isOperator = computed(() => currentRole.value === 'OPERATOR')
+const roleLabel = computed(() => (isAdmin.value ? '系统管理员' : '安保值班员'))
+const roleTagType = computed(() => (isAdmin.value ? 'danger' : 'warning'))
 
 // 数据状态
 const deviceList = ref([])
@@ -33,8 +47,22 @@ let deviceChart = null
 
 const imageBaseUrl = ''
 
-// RBAC：安保可处理告警；管理员额外拥有导出与设备管理权限
-const canHandle = computed(() => currentRole.value === 'ADMIN' || currentRole.value === 'OPERATOR')
+// RBAC：安保可处理告警；管理员额外拥有导出权限
+const canHandle = computed(() => isAdmin.value || isOperator.value)
+
+const syncCurrentRole = () => {
+  const cached = localStorage.getItem('user_role')
+  if (cached === 'ADMIN' || cached === 'OPERATOR') {
+    currentRole.value = cached
+    return
+  }
+  const user = getUserInfo()
+  const role = String(user?.role || '').trim().toUpperCase()
+  if (role === 'ADMIN' || role === 'OPERATOR') {
+    currentRole.value = role
+    localStorage.setItem('user_role', role)
+  }
+}
 const displayName = computed(() => {
   const user = getUserInfo()
   return user?.nickname || user?.username || '用户'
@@ -375,13 +403,147 @@ const onLogout = () => {
   router.replace('/login')
 }
 
+const onAddDevice = () => {
+  ElMessage.info('设备添加功能（管理员专属）')
+}
+
+const onEditDevice = (row) => {
+  ElMessage.info(`编辑设备：${row.deviceName}（管理员专属）`)
+}
+
+const onDeleteDevice = async (row) => {
+  try {
+    await deleteDevice(row.id)
+    ElMessage.success('设备已删除')
+    deviceList.value = deviceList.value.filter((item) => item.id !== row.id)
+    updateCharts()
+  } catch (error) {
+    console.error('删除设备失败', error)
+  }
+}
+
+// ── 安保人员账户管理（ADMIN 专属） ──
+const userManageVisible = ref(false)
+const addUserVisible = ref(false)
+const userLoading = ref(false)
+const addUserLoading = ref(false)
+const operatorList = ref([])
+const addUserForm = reactive({
+  username: '',
+  password: ''
+})
+
+const formatUserTime = (timeStr) => {
+  if (!timeStr) return '-'
+  return new Date(timeStr).toLocaleString()
+}
+
+const getRoleLabel = (role) => {
+  return role === 'ADMIN' ? '系统管理员' : '安保值班员'
+}
+
+const fetchOperatorList = async () => {
+  userLoading.value = true
+  try {
+    const res = await getUserList({ current: 1, size: 100, role: 'OPERATOR' })
+    operatorList.value = res.records || []
+  } catch (error) {
+    console.error('获取安保人员列表失败', error)
+  } finally {
+    userLoading.value = false
+  }
+}
+
+const openUserManage = async () => {
+  userManageVisible.value = true
+  await fetchOperatorList()
+}
+
+const resetAddUserForm = () => {
+  addUserForm.username = ''
+  addUserForm.password = ''
+}
+
+const openAddUserDialog = () => {
+  resetAddUserForm()
+  addUserVisible.value = true
+}
+
+const onSubmitAddUser = async () => {
+  const username = addUserForm.username.trim()
+  const password = addUserForm.password.trim()
+  if (!username || !password) {
+    ElMessage.warning('请输入用户名和密码')
+    return
+  }
+  if (password.length < 6) {
+    ElMessage.warning('密码长度不能少于 6 位')
+    return
+  }
+
+  addUserLoading.value = true
+  try {
+    await addOperatorUser({ username, password })
+    ElMessage.success('安保账号创建成功')
+    addUserVisible.value = false
+    resetAddUserForm()
+    await fetchOperatorList()
+  } catch (error) {
+    console.error('创建安保账号失败', error)
+  } finally {
+    addUserLoading.value = false
+  }
+}
+
+const onDeleteOperator = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认要注销该安保账户「${row.username}」吗？`,
+      '注销确认',
+      {
+        confirmButtonText: '确认注销',
+        cancelButtonText: '取消',
+        type: 'warning',
+        customClass: 'dark-message-box'
+      }
+    )
+    await deleteOperatorUser(row.id)
+    ElMessage.success('安保账户已注销')
+    await fetchOperatorList()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除安保账号失败', error)
+    }
+  }
+}
+
+const onResetOperatorPassword = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确认将「${row.username}」的密码重置为 123456 吗？`,
+      '重置密码',
+      {
+        confirmButtonText: '确认重置',
+        cancelButtonText: '取消',
+        type: 'info',
+        customClass: 'dark-message-box'
+      }
+    )
+    await resetOperatorPassword(row.id)
+    ElMessage.success('密码已重置为 123456')
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('重置密码失败', error)
+    }
+  }
+}
+
 watch([alertList, deviceList], () => {
   updateCharts()
 }, { deep: true })
 
 onMounted(async () => {
-  // 每次进入大屏时同步最新角色，确保切换账号后权限立即生效
-  currentRole.value = localStorage.getItem(USER_ROLE_KEY) || 'OPERATOR'
+  syncCurrentRole()
   document.title = ORIGINAL_TITLE
   await fetchDashboardData()
   await nextTick()
@@ -410,16 +572,45 @@ onUnmounted(() => {
       <el-header class="dashboard-header">
         <div class="header-glow"></div>
         <div class="header-actions">
+          <el-tag :type="roleTagType" effect="dark" class="role-tag">{{ roleLabel }}</el-tag>
           <span class="header-user">{{ displayName }}</span>
+          <el-button
+            v-if="currentRole === 'ADMIN'"
+            class="user-manage-btn"
+            type="primary"
+            size="small"
+            @click.stop="openUserManage"
+          >
+            安保人员管理
+          </el-button>
           <el-button class="logout-btn" size="small" @click.stop="onLogout">
             退出登录
           </el-button>
         </div>
         <h1 class="header-title">智能门禁安防管理大屏</h1>
-        <div class="header-subtitle">INTELLIGENT DOOR ALERT COMMAND CENTER</div>
+        <div class="header-subtitle">
+          {{ isAdmin ? 'ADMIN COMMAND CENTER · 全权限管理视图' : 'OPERATOR DUTY VIEW · 告警处置视图' }}
+        </div>
       </el-header>
 
       <el-main class="dashboard-main">
+        <el-alert
+          v-if="isOperator"
+          class="role-alert"
+          title="安保值班视图：您可查看告警并执行【处理】操作，导出与设备管理功能已隐藏。"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
+        <el-alert
+          v-if="isAdmin"
+          class="role-alert"
+          title="管理员视图：您拥有导出报表、处理告警、设备管理及安保人员账户维护的完整权限。"
+          type="success"
+          show-icon
+          :closable="false"
+        />
+
         <el-row :gutter="20" class="stats-row">
           <el-col :span="8">
             <el-card class="dashboard-card stats-card" shadow="never">
@@ -472,8 +663,18 @@ onUnmounted(() => {
           <el-col :span="8">
             <el-card class="dashboard-card" shadow="never">
               <template #header>
-                <div class="card-header">
-                  <span>设备运行状态</span>
+                <div class="card-header-row">
+                  <div class="card-header">
+                    <span>设备运行状态</span>
+                  </div>
+                  <el-button
+                    v-if="currentRole === 'ADMIN'"
+                    type="primary"
+                    size="small"
+                    @click.stop="onAddDevice"
+                  >
+                    添加设备
+                  </el-button>
                 </div>
               </template>
               <el-table class="dark-table" :data="deviceList" height="100%" style="width: 100%">
@@ -490,6 +691,16 @@ onUnmounted(() => {
                     </el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column v-if="currentRole === 'ADMIN'" label="管理" width="120" align="center">
+                  <template #default="scope">
+                    <el-button type="primary" link size="small" @click.stop="onEditDevice(scope.row)">
+                      修改
+                    </el-button>
+                    <el-button type="danger" link size="small" @click.stop="onDeleteDevice(scope.row)">
+                      删除
+                    </el-button>
+                  </template>
+                </el-table-column>
               </el-table>
             </el-card>
           </el-col>
@@ -504,6 +715,7 @@ onUnmounted(() => {
                   <el-button v-if="currentRole === 'ADMIN'" type="success" size="small" @click.stop="exportToExcel">
                     导出为 Excel
                   </el-button>
+                  <span v-else class="export-disabled-hint">无导出权限</span>
                 </div>
               </template>
               <el-table class="dark-table" :data="alertList" height="100%" style="width: 100%">
@@ -572,6 +784,92 @@ onUnmounted(() => {
         </el-row>
       </el-main>
     </el-container>
+
+    <!-- 安保人员账户维护（ADMIN 专属） -->
+    <el-dialog
+      v-model="userManageVisible"
+      class="user-manage-dialog"
+      width="820px"
+      destroy-on-close
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <template #header>
+        <div class="user-dialog-header">
+          <div>
+            <div class="user-dialog-title">系统安保人员账户维护</div>
+            <div class="user-dialog-subtitle">SECURITY OPERATOR ACCOUNT MANAGEMENT</div>
+          </div>
+          <el-button type="primary" size="small" @click.stop="openAddUserDialog">
+            添加新安保
+          </el-button>
+        </div>
+      </template>
+
+      <el-table
+        v-loading="userLoading"
+        class="dark-table user-manage-table"
+        :data="operatorList"
+        height="360"
+        style="width: 100%"
+      >
+        <el-table-column prop="id" label="用户 ID" width="90" align="center" />
+        <el-table-column prop="username" label="用户名" min-width="120" show-overflow-tooltip />
+        <el-table-column label="角色" width="130" align="center">
+          <template #default="scope">
+            <el-tag type="warning" effect="dark">{{ getRoleLabel(scope.row.role) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="创建时间" min-width="170">
+          <template #default="scope">
+            {{ formatUserTime(scope.row.createTime) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" align="center" fixed="right">
+          <template #default="scope">
+            <el-button type="primary" link size="small" @click.stop="onResetOperatorPassword(scope.row)">
+              重置密码
+            </el-button>
+            <el-button type="danger" link size="small" @click.stop="onDeleteOperator(scope.row)">
+              删除
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- 添加新安保 -->
+    <el-dialog
+      v-model="addUserVisible"
+      class="user-manage-dialog add-user-dialog"
+      title="添加新安保"
+      width="420px"
+      destroy-on-close
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="80px" class="add-user-form">
+        <el-form-item label="用户名">
+          <el-input v-model="addUserForm.username" placeholder="请输入安保账号用户名" clearable />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="addUserForm.password"
+            type="password"
+            placeholder="请输入初始密码（至少6位）"
+            show-password
+            clearable
+            @keyup.enter="onSubmitAddUser"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="addUserVisible = false">取消</el-button>
+        <el-button type="primary" :loading="addUserLoading" @click="onSubmitAddUser">
+          确认添加
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -639,6 +937,22 @@ body {
   letter-spacing: 1px;
 }
 
+.role-tag {
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.role-alert {
+  margin-bottom: 16px;
+  border-radius: 8px;
+}
+
+.export-disabled-hint {
+  font-size: 12px;
+  color: #64748b;
+  letter-spacing: 1px;
+}
+
 .logout-btn {
   border: 1px solid #334155 !important;
   background: rgba(20, 28, 52, 0.75) !important;
@@ -650,6 +964,79 @@ body {
   border-color: #3b82f6 !important;
   box-shadow: 0 0 10px rgba(59, 130, 246, 0.35);
   color: #f8fafc !important;
+}
+
+.user-manage-btn {
+  border: none !important;
+  background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.35);
+}
+
+.user-manage-btn:hover {
+  box-shadow: 0 0 18px rgba(59, 130, 246, 0.55);
+}
+
+:deep(.user-manage-dialog) {
+  background: rgba(16, 24, 48, 0.96) !important;
+  border: 1px solid #1a2f56;
+  border-radius: 12px;
+  box-shadow: 0 0 40px rgba(0, 150, 255, 0.15);
+}
+
+:deep(.user-manage-dialog .el-dialog__header) {
+  margin-right: 0;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid #1a2f56;
+}
+
+:deep(.user-manage-dialog .el-dialog__body) {
+  padding: 16px 24px 24px;
+}
+
+:deep(.user-manage-dialog .el-dialog__footer) {
+  border-top: 1px solid #1a2f56;
+  padding: 12px 24px 20px;
+}
+
+:deep(.user-manage-dialog .el-dialog__title),
+:deep(.user-manage-dialog .el-form-item__label) {
+  color: #e2e8f0;
+}
+
+.user-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.user-dialog-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f1f5f9;
+  letter-spacing: 2px;
+}
+
+.user-dialog-subtitle {
+  margin-top: 4px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #64748b;
+}
+
+.user-manage-table {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.add-user-form :deep(.el-input__wrapper) {
+  background: rgba(20, 28, 52, 0.6) !important;
+  border: 1px solid #1a2f56;
+  box-shadow: none !important;
+}
+
+.add-user-form :deep(.el-input__inner) {
+  color: #e2e8f0;
 }
 
 .header-title {

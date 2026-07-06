@@ -1,5 +1,6 @@
 package com.dooralert.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -12,16 +13,20 @@ import com.dooralert.satoken.RbacHelper;
 import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
 import cn.dev33.satoken.stp.StpUtil;
-import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
 
     @Override
-    public IPage<SysUserVO> pageUsers(long current, long size) {
-        Page<SysUser> page = this.page(new Page<>(current, size));
-        return page.convert(this::toVO);
+    public IPage<SysUserVO> pageUsers(long current, long size, String role) {
+        Page<SysUser> page = new Page<>(current, size);
+        LambdaQueryWrapper<SysUser> wrapper = new LambdaQueryWrapper<>();
+        if (role != null && !role.isBlank()) {
+            wrapper.eq(SysUser::getRole, role.trim().toUpperCase());
+        }
+        wrapper.orderByDesc(SysUser::getCreateTime);
+        return this.page(page, wrapper).convert(this::toVO);
     }
 
     @Override
@@ -32,8 +37,22 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
 
     @Override
     public boolean addUser(SysUserDTO dto) {
+        String username = dto.getUsername() == null ? "" : dto.getUsername().trim();
+        if (username.isEmpty()) {
+            throw new RuntimeException("用户名不能为空");
+        }
+        long count = this.lambdaQuery().eq(SysUser::getUsername, username).count();
+        if (count > 0) {
+            throw new RuntimeException("用户名已存在");
+        }
+
         SysUser entity = new SysUser();
-        BeanUtils.copyProperties(dto, entity);
+        entity.setUsername(username);
+        entity.setPassword(dto.getPassword());
+        entity.setNickname(
+                dto.getNickname() == null || dto.getNickname().isBlank() ? username : dto.getNickname().trim()
+        );
+        entity.setRole(RbacHelper.ROLE_OPERATOR);
         return this.save(entity);
     }
 
@@ -43,8 +62,41 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         if (entity == null) {
             return false;
         }
-        BeanUtils.copyProperties(dto, entity);
+        if (RbacHelper.isAdmin(entity)) {
+            throw new RuntimeException("不允许修改管理员账户");
+        }
+        if (dto.getPassword() != null && !dto.getPassword().isBlank()) {
+            entity.setPassword(dto.getPassword());
+        }
+        if (dto.getNickname() != null && !dto.getNickname().isBlank()) {
+            entity.setNickname(dto.getNickname().trim());
+        }
         entity.setId(id);
+        return this.updateById(entity);
+    }
+
+    @Override
+    public boolean deleteUser(Long id) {
+        SysUser entity = this.getById(id);
+        if (entity == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        if (RbacHelper.isAdmin(entity)) {
+            throw new RuntimeException("不允许删除管理员账户");
+        }
+        return this.removeById(id);
+    }
+
+    @Override
+    public boolean resetPassword(Long id) {
+        SysUser entity = this.getById(id);
+        if (entity == null) {
+            return false;
+        }
+        if (RbacHelper.isAdmin(entity)) {
+            throw new RuntimeException("不允许重置管理员密码");
+        }
+        entity.setPassword("123456");
         return this.updateById(entity);
     }
 

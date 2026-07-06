@@ -19,40 +19,43 @@ export function getUserRole() {
 }
 
 /**
- * 根据登录响应解析大屏角色：admin → ADMIN，security 等 → OPERATOR
+ * 根据登录响应解析大屏角色（优先使用后端 role 字段：ADMIN / OPERATOR）
  */
 export function resolveRoleFromLogin(data) {
   if (!data) return 'OPERATOR'
+
+  const role = String(data.role || '').trim().toUpperCase()
+  if (role === 'ADMIN' || role === 'OPERATOR') {
+    return role
+  }
+
   if (Array.isArray(data.roles) && data.roles.includes('ADMIN')) {
     return 'ADMIN'
   }
-  if (data.username === 'admin' || data.role === 'admin') {
+
+  if (String(data.username || '').toLowerCase() === 'admin') {
     return 'ADMIN'
   }
+
   return 'OPERATOR'
 }
 
+/** 解析当前用户角色（优先 localStorage，其次 userInfo） */
+export function resolveUserRole(user) {
+  const cached = getUserRole()
+  if (cached === 'ADMIN' || cached === 'OPERATOR') {
+    return cached
+  }
+  return resolveRoleFromLogin(user)
+}
+
 export function hasRole(role) {
-  const user = getUserInfo()
-  return Array.isArray(user?.roles) && user.roles.includes(role)
+  return getUserRole() === role
 }
 
 export function hasPermission(permission) {
   const user = getUserInfo()
   return Array.isArray(user?.permissions) && user.permissions.includes(permission)
-}
-
-/**
- * @deprecated 优先使用 localStorage 中的 user_role
- */
-export function resolveUserRole(user = getUserInfo()) {
-  const cached = getUserRole()
-  if (cached) return cached
-  if (!user) return 'OPERATOR'
-  if (user.username === 'admin' || user.roles?.includes('ADMIN')) {
-    return 'ADMIN'
-  }
-  return 'OPERATOR'
 }
 
 export function isAdminUser() {
@@ -77,7 +80,9 @@ export function saveUserInfo(data) {
 }
 
 export function saveUserRole(data) {
-  localStorage.setItem(USER_ROLE_KEY, resolveRoleFromLogin(data))
+  const role = resolveRoleFromLogin(data)
+  localStorage.setItem(USER_ROLE_KEY, role)
+  return role
 }
 
 /** 清除本地登录态（token + 用户信息 + 角色） */

@@ -3,7 +3,7 @@ import { reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { login } from '@/api/index'
-import { clearUserInfo, saveUserInfo, saveUserRole } from '@/utils/permission'
+import { clearUserInfo, saveUserInfo } from '@/utils/permission'
 
 const router = useRouter()
 const loading = ref(false)
@@ -37,9 +37,10 @@ const onSubmit = async () => {
     }
     localStorage.setItem('token', data.token)
     saveUserInfo(data)
-    // 明确写入大屏角色，供 Dashboard 按钮权限隔离
-    saveUserRole({ ...data, username: data.username || username })
-    ElMessage.success('登录成功')
+    // 直接使用后端返回的真实角色字段 ADMIN / OPERATOR
+    const role = String(data.role || 'OPERATOR').trim().toUpperCase()
+    localStorage.setItem('user_role', role)
+    ElMessage.success(`登录成功（${role === 'ADMIN' ? '管理员' : '安保'}视图）`)
     router.replace('/dashboard')
   } catch (error) {
     ElMessage.error(error.message || '登录失败，请检查账号密码')

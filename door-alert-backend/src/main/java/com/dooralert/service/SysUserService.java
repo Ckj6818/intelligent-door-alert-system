@@ -13,7 +13,7 @@ public interface SysUserService extends IService<SysUser> {
     /**
      * 分页查询用户
      */
-    IPage<SysUserVO> pageUsers(long current, long size);
+    IPage<SysUserVO> pageUsers(long current, long size, String role);
 
     /**
      * 根据 ID 查询用户（返回 VO）
@@ -21,7 +21,7 @@ public interface SysUserService extends IService<SysUser> {
     SysUserVO getUserById(Long id);
 
     /**
-     * 新增用户
+     * 新增安保用户
      */
     boolean addUser(SysUserDTO dto);
 
@@ -29,6 +29,16 @@ public interface SysUserService extends IService<SysUser> {
      * 修改用户
      */
     boolean updateUser(Long id, SysUserDTO dto);
+
+    /**
+     * 删除安保用户（禁止删除管理员）
+     */
+    boolean deleteUser(Long id);
+
+    /**
+     * 重置安保密码为默认 123456
+     */
+    boolean resetPassword(Long id);
 
     /**
      * 用户登录
