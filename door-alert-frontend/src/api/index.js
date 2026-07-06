@@ -83,6 +83,39 @@ export function handleAlert(id) {
   })
 }
 
+/** 删除告警记录（逻辑删除，管理员专属） */
+export function deleteAlert(id) {
+  return request({
+    url: `/alerts/${id}`,
+    method: 'delete'
+  })
+}
+
+/** 一键清空所有活跃告警（管理员专属） */
+export function clearAllAlerts() {
+  return request({
+    url: '/alerts/clear',
+    method: 'delete'
+  })
+}
+
+/** 获取回收站列表（管理员专属） */
+export function getRecycleBin() {
+  return request({
+    url: '/alerts/recycle-bin',
+    method: 'get'
+  })
+}
+
+/** 恢复逻辑删除的告警（管理员专属） */
+export function restoreAlert(id) {
+  return request({
+    url: `/alerts/${id}/restore`,
+    method: 'put'
+  })
+}
+
+
 /** 获取安保人员列表（管理员专属） */
 export function getUserList() {
   return request({

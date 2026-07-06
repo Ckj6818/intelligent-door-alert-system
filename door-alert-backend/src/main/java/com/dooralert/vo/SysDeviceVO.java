@@ -16,7 +16,7 @@ public class SysDeviceVO {
 
     private String location;
 
-    /** 0-离线, 1-在线 */
+    /** 0-离线, 1-在线（查询时由心跳池实时计算，非库内静态值） */
     private Integer status;
 
     private LocalDateTime createTime;

@@ -16,6 +16,23 @@ BACKEND_UPLOAD_URL = os.environ.get(
 DEVICE_ID = int(os.environ.get("DEVICE_ID", "1"))  # 当前测试设备的固定编号
 HEADLESS = os.environ.get("HEADLESS", "0").strip() in ("1", "true", "yes")
 VIDEO_LOOP = os.environ.get("VIDEO_LOOP", "1").strip() in ("1", "true", "yes")
+HEARTBEAT_INTERVAL = float(os.environ.get("HEARTBEAT_INTERVAL", "10"))
+
+
+def resolve_heartbeat_url():
+    """根据上报地址或显式配置解析心跳 URL。"""
+    explicit = os.environ.get("BACKEND_HEARTBEAT_URL", "").strip()
+    if explicit:
+        return explicit
+    base = os.environ.get("BACKEND_BASE_URL", "").strip()
+    if not base:
+        from urllib.parse import urlparse
+        parsed = urlparse(BACKEND_UPLOAD_URL)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+    return f"{base.rstrip('/')}/api/devices/{DEVICE_ID}/heartbeat"
+
+
+BACKEND_HEARTBEAT_URL = resolve_heartbeat_url()
 
 # ================= 状态机与防抖控制 =================
 # 记录上一次上报时间戳，避免连续上报挤爆网络
@@ -30,6 +47,32 @@ MAX_FAILED_ATTEMPTS = 3        # 最大连续失败次数
 
 
 import traceback
+
+def send_heartbeat():
+    """向云端上报设备存活心跳。"""
+    try:
+        response = requests.post(BACKEND_HEARTBEAT_URL, timeout=1.5)
+        if response.status_code == 200:
+            try:
+                res_json = response.json()
+                if res_json.get("code") == 200:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] 心跳上报成功 deviceId={DEVICE_ID}")
+                else:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 心跳上报被后端拒绝: {res_json.get('message')}")
+            except ValueError:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] 心跳上报成功 deviceId={DEVICE_ID}")
+        else:
+            print(f"[WARN] 心跳上报失败 HTTP {response.status_code}")
+    except Exception as exc:
+        print(f"[WARN] 心跳上报异常: {exc}")
+
+
+def heartbeat_loop():
+    """后台线程：周期性发送心跳，维持大屏在线状态。"""
+    while True:
+        send_heartbeat()
+        time.sleep(HEARTBEAT_INTERVAL)
+
 
 def upload_alert_async(payload, image_path):
     """
@@ -64,6 +107,7 @@ def upload_alert_async(payload, image_path):
                 FAILED_COUNTER = 0
                 BACKEND_ONLINE = True
                 UPLOAD_COOLDOWN = 2.0
+                send_heartbeat()
             else:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] [WARN] 数据上报云端失败，非200状态码")
                 
@@ -197,6 +241,10 @@ def main():
     except RuntimeError as exc:
         print(f"[ERROR] {exc}")
         return
+
+    print(f"[INFO] 心跳地址: {BACKEND_HEARTBEAT_URL}，间隔 {HEARTBEAT_INTERVAL}s")
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
+    send_heartbeat()
 
     while True:
         ret, frame = frame_source.read()

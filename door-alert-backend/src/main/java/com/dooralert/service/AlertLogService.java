@@ -33,4 +33,24 @@ public interface AlertLogService extends IService<AlertLog> {
      * 导出全部告警记录（需 alert:export 权限）
      */
     List<AlertLogVO> listAllForExport();
+
+    /**
+     * 逻辑删除告警记录
+     */
+    boolean logicalDeleteAlert(Long id);
+
+    /**
+     * 逻辑清空所有活跃告警记录
+     */
+    boolean logicalClearAll();
+
+    /**
+     * 获取近 15 天内被逻辑删除的回收站列表
+     */
+    List<AlertLogVO> listRecycleBin();
+
+    /**
+     * 从回收站中恢复已逻辑删除的记录
+     */
+    boolean restoreAlert(Long id);
 }

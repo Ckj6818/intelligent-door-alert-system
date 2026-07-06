@@ -24,4 +24,6 @@ public class AlertLogVO {
     private Integer status;
 
     private LocalDateTime createTime;
+
+    private LocalDateTime deleteTime;
 }

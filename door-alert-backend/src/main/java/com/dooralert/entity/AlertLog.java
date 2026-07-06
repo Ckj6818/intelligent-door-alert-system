@@ -35,4 +35,10 @@ public class AlertLog {
 
     @TableField(value = "create_time", fill = FieldFill.INSERT)
     private LocalDateTime createTime;
+
+    @TableField("deleted")
+    private Integer deleted;
+
+    @TableField("delete_time")
+    private LocalDateTime deleteTime;
 }

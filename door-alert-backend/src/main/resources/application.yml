@@ -28,3 +28,8 @@ sa-token:
   is-read-header: true
   is-read-cookie: false
   jwt-secret-key: intelligent-door-alert-sa-token-jwt-secret-2026-secure
+
+# 设备心跳监控：超过 timeout 未收到心跳则判定离线
+device:
+  heartbeat:
+    timeout-seconds: 30

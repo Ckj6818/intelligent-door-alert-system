@@ -48,7 +48,7 @@ public class AlertLogController {
     /**
      * 根据 ID 查询告警详情
      */
-    @GetMapping("/{id}")
+    @GetMapping("/{id:\\d+}")
     public Result<AlertLogVO> getById(@PathVariable Long id) {
         AlertLogVO vo = alertLogService.getAlertById(id);
         return vo != null ? Result.success(vo) : Result.error("告警记录不存在");
@@ -65,7 +65,7 @@ public class AlertLogController {
     /**
      * 修改告警（如变更处理状态）
      */
-    @PutMapping("/{id}")
+    @PutMapping("/{id:\\d+}")
     public Result<Boolean> update(@PathVariable Long id, @RequestBody AlertLogDTO dto) {
         return alertLogService.updateAlert(id, dto)
                 ? Result.success(true)
@@ -75,16 +75,45 @@ public class AlertLogController {
     /**
      * 删除告警（仅 ADMIN 可执行）
      */
-    @DeleteMapping("/{id}")
+    @DeleteMapping("/{id:\\d+}")
     @SaCheckRole("ADMIN")
     public Result<Boolean> delete(@PathVariable Long id) {
-        return Result.success(alertLogService.removeById(id));
+        return Result.success(alertLogService.logicalDeleteAlert(id));
+    }
+
+    /**
+     * 一键清空所有活跃告警记录
+     */
+    @DeleteMapping("/clear")
+    @SaCheckRole("ADMIN")
+    public Result<Boolean> clearAll() {
+        return Result.success(alertLogService.logicalClearAll());
+    }
+
+    /**
+     * 获取回收站列表
+     */
+    @GetMapping("/recycle-bin")
+    @SaCheckRole("ADMIN")
+    public Result<List<AlertLogVO>> recycleBin() {
+        return Result.success(alertLogService.listRecycleBin());
+    }
+
+    /**
+     * 恢复已逻辑删除的记录
+     */
+    @PutMapping("/{id:\\d+}/restore")
+    @SaCheckRole("ADMIN")
+    public Result<Boolean> restore(@PathVariable Long id) {
+        return alertLogService.restoreAlert(id)
+                ? Result.success("恢复成功", true)
+                : Result.error("恢复失败或记录不存在");
     }
 
     /**
      * 处理告警：ADMIN / OPERATOR 均可执行（安保核心职责）
      */
-    @PutMapping("/{id}/handle")
+    @PutMapping("/{id:\\d+}/handle")
     @SaCheckRole(value = {"ADMIN", "OPERATOR"}, mode = SaMode.OR)
     @SaCheckPermission("alert:handle")
     public Result<Boolean> handle(@PathVariable Long id) {
@@ -117,6 +146,7 @@ public class AlertLogController {
             dto.setDangerLevel(dangerLevel);
 
             AlertLogVO vo = alertLogService.uploadAlert(dto, file);
+            SysDeviceController.touchHeartbeat(deviceId);
             AlertWebSocketServer.sendAlertNotification(vo);
             return Result.success("告警上报成功", vo);
         } catch (Exception e) {

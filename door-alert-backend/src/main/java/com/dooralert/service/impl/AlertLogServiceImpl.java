@@ -22,8 +22,8 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
-        // 使用 LambdaQueryWrapper 按创建时间降序排列，最新告警排在最前面
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 0); // 仅查询未被逻辑删除的记录
         wrapper.orderByDesc(AlertLog::getCreateTime);
         Page<AlertLog> page = this.page(new Page<>(current, size), wrapper);
         return page.convert(this::toVO);
@@ -32,20 +32,24 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     @Override
     public AlertLogVO getAlertById(Long id) {
         AlertLog entity = this.getById(id);
-        return entity == null ? null : toVO(entity);
+        if (entity == null || Integer.valueOf(1).equals(entity.getDeleted())) {
+            return null;
+        }
+        return toVO(entity);
     }
 
     @Override
     public boolean addAlert(AlertLogDTO dto) {
         AlertLog entity = new AlertLog();
         BeanUtils.copyProperties(dto, entity);
+        entity.setDeleted(0); // 默认未删除
         return this.save(entity);
     }
 
     @Override
     public boolean updateAlert(Long id, AlertLogDTO dto) {
         AlertLog entity = this.getById(id);
-        if (entity == null) {
+        if (entity == null || Integer.valueOf(1).equals(entity.getDeleted())) {
             return false;
         }
         BeanUtils.copyProperties(dto, entity);
@@ -56,7 +60,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     @Override
     public boolean handleAlert(Long id) {
         AlertLog entity = this.getById(id);
-        if (entity == null) {
+        if (entity == null || Integer.valueOf(1).equals(entity.getDeleted())) {
             return false;
         }
         entity.setStatus(1);
@@ -119,6 +123,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     public List<AlertLogVO> listAllForExport() {
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 0); // 仅导出未被逻辑删除的记录
         wrapper.orderByDesc(AlertLog::getCreateTime);
         return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
     }
@@ -127,5 +132,56 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         AlertLogVO vo = new AlertLogVO();
         BeanUtils.copyProperties(entity, vo);
         return vo;
+    }
+
+    @Override
+    public boolean logicalDeleteAlert(Long id) {
+        AlertLog entity = this.getById(id);
+        if (entity == null || Integer.valueOf(1).equals(entity.getDeleted())) {
+            return false;
+        }
+        entity.setDeleted(1);
+        entity.setDeleteTime(java.time.LocalDateTime.now());
+        return this.updateById(entity);
+    }
+
+    @Override
+    public boolean logicalClearAll() {
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper = 
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 0)
+               .set(AlertLog::getDeleted, 1)
+               .set(AlertLog::getDeleteTime, java.time.LocalDateTime.now());
+        return this.update(wrapper);
+    }
+
+    @Override
+    public List<AlertLogVO> listRecycleBin() {
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        // 查询已删除，且删除时间在 15 天内的记录
+        java.time.LocalDateTime limitTime = java.time.LocalDateTime.now().minusDays(15);
+        wrapper.eq(AlertLog::getDeleted, 1)
+               .ge(AlertLog::getDeleteTime, limitTime)
+               .orderByDesc(AlertLog::getDeleteTime);
+        return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
+    }
+
+    @Override
+    public boolean restoreAlert(Long id) {
+        AlertLog entity = this.getById(id);
+        if (entity == null || !Integer.valueOf(1).equals(entity.getDeleted())) {
+            return false;
+        }
+        entity.setDeleted(0);
+        
+        // MyBatis-Plus 默认可能不更新为 null 的字段，我们需要用 UpdateWrapper 或者手动设置一个占位符，
+        // 这里使用 LambdaUpdateWrapper 来显式把 delete_time 更新为 null
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper = 
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
+        wrapper.eq(AlertLog::getId, id)
+               .set(AlertLog::getDeleted, 0)
+               .set(AlertLog::getDeleteTime, null);
+        return this.update(wrapper);
     }
 }

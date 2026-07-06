@@ -63,6 +63,7 @@ services:
     environment:
       BACKEND_UPLOAD_URL: http://backend:8081/api/alerts/upload
       DEVICE_ID: "1"
+      HEARTBEAT_INTERVAL: "10"
       HEADLESS: "1"
       VIDEO_LOOP: "1"
       # Windows Docker 无法直连 USB 摄像头：默认用挂载的 demo.jpg / demo.mp4 做答辩演示

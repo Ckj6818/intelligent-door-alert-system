@@ -8,6 +8,7 @@ import {
   getDeviceList,
   getAlertList,
   handleAlert,
+  deleteAlert,
   exportAlerts,
   deleteDevice,
   addDevice,
@@ -15,7 +16,10 @@ import {
   getUserList,
   addOperatorUser,
   deleteOperatorUser,
-  resetOperatorPassword
+  resetOperatorPassword,
+  clearAllAlerts,
+  getRecycleBin,
+  restoreAlert
 } from '@/api/index'
 import { getUserInfo, logout } from '@/utils/permission'
 
@@ -23,6 +27,8 @@ const router = useRouter()
 
 const ORIGINAL_TITLE = '智能门禁安防管理大屏'
 const ALERT_TITLE = '【⚠️有新告警】'
+const DEVICE_POLL_INTERVAL = 10000
+let devicePollTimer = null
 
 // 大屏 RBAC：从 localStorage 读取后端返回的真实角色 ADMIN / OPERATOR
 const currentRole = ref(localStorage.getItem('user_role') || 'OPERATOR')
@@ -393,6 +399,86 @@ const onHandleAlert = async (id) => {
   }
 }
 
+const onDeleteAlert = async (id) => {
+  try {
+    await ElMessageBox.confirm(
+      '确认要永久删除该条告警记录吗？',
+      '删除确认',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        customClass: 'dark-message-box'
+      }
+    )
+    await deleteAlert(id)
+    ElMessage.success('告警记录已删除')
+    alertList.value = alertList.value.filter((item) => item.id !== id)
+    updateCharts()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除告警失败', error)
+    }
+  }
+}
+
+const onClearAllAlerts = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '确认要一键清空所有活跃告警吗？清空后的记录可在回收站中恢复（保留15天）。',
+      '一键清空确认',
+      {
+        confirmButtonText: '确认清空',
+        cancelButtonText: '取消',
+        type: 'warning',
+        customClass: 'dark-message-box'
+      }
+    )
+    await clearAllAlerts()
+    ElMessage.success('所有活跃告警已清空并移入回收站')
+    await fetchAlertList()
+    updateCharts()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('一键清空失败', error)
+    }
+  }
+}
+
+// ── 回收站管理（ADMIN 专属） ──
+const recycleBinVisible = ref(false)
+const recycleBinLoading = ref(false)
+const recycleBinList = ref([])
+
+const fetchRecycleBin = async () => {
+  recycleBinLoading.value = true
+  try {
+    const res = await getRecycleBin()
+    recycleBinList.value = res || []
+  } catch (error) {
+    console.error('获取回收站列表失败', error)
+  } finally {
+    recycleBinLoading.value = false
+  }
+}
+
+const openRecycleBin = async () => {
+  recycleBinVisible.value = true
+  await fetchRecycleBin()
+}
+
+const onRestoreAlert = async (id) => {
+  try {
+    await restoreAlert(id)
+    ElMessage.success('告警记录已恢复')
+    await fetchRecycleBin()
+    await fetchAlertList()
+    updateCharts()
+  } catch (error) {
+    console.error('恢复告警记录失败', error)
+  }
+}
+
 const onDashboardClick = () => {
   stopTitleBlink()
 }
@@ -410,7 +496,6 @@ const onAddDevice = () => {
   deviceForm.id = null
   deviceForm.deviceName = ''
   deviceForm.location = ''
-  deviceForm.status = 1
   deviceFormVisible.value = true
 }
 
@@ -419,7 +504,6 @@ const onEditDevice = (row) => {
   deviceForm.id = row.id
   deviceForm.deviceName = row.deviceName
   deviceForm.location = row.location || ''
-  deviceForm.status = row.status ?? 1
   deviceFormVisible.value = true
 }
 
@@ -435,8 +519,7 @@ const onSubmitDeviceForm = async () => {
   try {
     const payload = {
       deviceName,
-      location,
-      status: deviceForm.status
+      location
     }
     if (deviceFormMode.value === 'add') {
       await addDevice(payload)
@@ -484,8 +567,7 @@ const deviceFormMode = ref('add')
 const deviceForm = reactive({
   id: null,
   deviceName: '',
-  location: '',
-  status: 1
+  location: ''
 })
 
 // ── 安保人员账户管理（ADMIN 专属） ──
@@ -618,9 +700,17 @@ onMounted(async () => {
   })
   window.addEventListener('resize', handleResize)
   initWebSocket()
+  devicePollTimer = setInterval(async () => {
+    await fetchDeviceList()
+    updateCharts()
+  }, DEVICE_POLL_INTERVAL)
 })
 
 onUnmounted(() => {
+  if (devicePollTimer) {
+    clearInterval(devicePollTimer)
+    devicePollTimer = null
+  }
   closeWebSocket()
   stopTitleBlink()
   window.speechSynthesis?.cancel()
@@ -778,10 +868,18 @@ onUnmounted(() => {
                   <div class="card-header">
                     <span>实时告警记录</span>
                   </div>
-                  <el-button v-if="currentRole === 'ADMIN'" type="success" size="small" @click.stop="exportToExcel">
-                    导出为 Excel
-                  </el-button>
-                  <span v-else class="export-disabled-hint">无导出权限</span>
+                  <div v-if="currentRole === 'ADMIN'" style="display: flex; gap: 8px;">
+                    <el-button type="success" size="small" @click.stop="exportToExcel">
+                      导出为 Excel
+                    </el-button>
+                    <el-button type="warning" size="small" @click.stop="openRecycleBin">
+                      回收站
+                    </el-button>
+                    <el-button type="danger" size="small" @click.stop="onClearAllAlerts">
+                      一键清空
+                    </el-button>
+                  </div>
+                  <span v-else class="export-disabled-hint">无导出和清理权限</span>
                 </div>
               </template>
               <el-table class="dark-table" :data="alertList" height="100%" style="width: 100%">
@@ -831,17 +929,27 @@ onUnmounted(() => {
                     </el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="100" align="center" fixed="right">
+                <el-table-column label="操作" width="160" align="center" fixed="right">
                   <template #default="scope">
-                    <el-button
-                      v-if="canHandle && scope.row.status !== 1"
-                      type="primary"
-                      size="small"
-                      @click.stop="onHandleAlert(scope.row.id)"
-                    >
-                      处理
-                    </el-button>
-                    <span v-else class="empty-img">-</span>
+                    <div style="display: flex; gap: 8px; justify-content: center; align-items: center;">
+                      <el-button
+                        v-if="canHandle && scope.row.status !== 1"
+                        type="primary"
+                        size="small"
+                        @click.stop="onHandleAlert(scope.row.id)"
+                      >
+                        处理
+                      </el-button>
+                      <el-button
+                        v-if="isAdmin"
+                        type="danger"
+                        size="small"
+                        @click.stop="onDeleteAlert(scope.row.id)"
+                      >
+                        删除
+                      </el-button>
+                      <span v-if="scope.row.status === 1 && !isAdmin" class="empty-img">-</span>
+                    </div>
                   </template>
                 </el-table-column>
               </el-table>
@@ -954,12 +1062,7 @@ onUnmounted(() => {
         <el-form-item label="安装位置">
           <el-input v-model="deviceForm.location" placeholder="如：1号楼正门入口" clearable />
         </el-form-item>
-        <el-form-item label="运行状态">
-          <el-radio-group v-model="deviceForm.status">
-            <el-radio :value="1">在线</el-radio>
-            <el-radio :value="0">离线</el-radio>
-          </el-radio-group>
-        </el-form-item>
+        <p class="device-form-hint">在线/离线由边缘端心跳自动判定，无需手动设置。</p>
       </el-form>
       <template #footer>
         <el-button @click="deviceFormVisible = false">取消</el-button>
@@ -967,6 +1070,69 @@ onUnmounted(() => {
           {{ deviceFormMode === 'add' ? '确认添加' : '保存修改' }}
         </el-button>
       </template>
+    </el-dialog>
+
+    <!-- 回收站弹窗（ADMIN 专属） -->
+    <el-dialog
+      v-model="recycleBinVisible"
+      class="user-manage-dialog"
+      width="840px"
+      destroy-on-close
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <template #header>
+        <div class="user-dialog-header">
+          <div>
+            <div class="user-dialog-title">告警记录回收站</div>
+            <div class="user-dialog-subtitle">ALERT LOG RECYCLE BIN (保留 15 天内数据)</div>
+          </div>
+          <el-button type="primary" size="small" @click.stop="fetchRecycleBin">
+            刷新
+          </el-button>
+        </div>
+      </template>
+      <el-table
+        v-loading="recycleBinLoading"
+        class="dark-table user-manage-table"
+        :data="recycleBinList"
+        height="400"
+        style="width: 100%"
+      >
+        <el-table-column label="删除时间" width="160">
+          <template #default="scope">
+            {{ formatTime(scope.row.deleteTime) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="原告警时间" width="160">
+          <template #default="scope">
+            {{ formatTime(scope.row.createTime) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="deviceId" label="设备" width="60" align="center" />
+        <el-table-column label="危险等级" width="100" align="center">
+          <template #default="scope">
+            <el-tag v-if="scope.row.dangerLevel >= 3" type="danger" effect="dark">HIGH</el-tag>
+            <el-tag v-else-if="scope.row.dangerLevel === 2" type="warning" effect="dark">MEDIUM</el-tag>
+            <el-tag v-else-if="scope.row.dangerLevel === 1" type="info" effect="dark">LOW</el-tag>
+            <el-tag v-else type="success" effect="dark">SAFE</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="scope">
+            <el-tag :type="scope.row.status === 1 ? 'success' : 'danger'" effect="dark">
+              {{ scope.row.status === 1 ? '已处理' : '未处理' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" min-width="100" align="center" fixed="right">
+          <template #default="scope">
+            <el-button type="success" link size="small" @click.stop="onRestoreAlert(scope.row.id)">
+              恢复记录
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-dialog>
   </div>
 </template>
@@ -1135,6 +1301,13 @@ body {
 
 .add-user-form :deep(.el-input__inner) {
   color: #e2e8f0;
+}
+
+.device-form-hint {
+  margin: 0 0 8px 90px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
 }
 
 .header-title {

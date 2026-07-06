@@ -30,6 +30,9 @@ public class SysDeviceServiceImpl extends ServiceImpl<SysDeviceMapper, SysDevice
     public boolean addDevice(SysDeviceDTO dto) {
         SysDevice entity = new SysDevice();
         BeanUtils.copyProperties(dto, entity);
+        if (entity.getStatus() == null) {
+            entity.setStatus(0);
+        }
         return this.save(entity);
     }
 
@@ -39,7 +42,8 @@ public class SysDeviceServiceImpl extends ServiceImpl<SysDeviceMapper, SysDevice
         if (entity == null) {
             return false;
         }
-        BeanUtils.copyProperties(dto, entity);
+        entity.setDeviceName(dto.getDeviceName());
+        entity.setLocation(dto.getLocation());
         entity.setId(id);
         return this.updateById(entity);
     }
