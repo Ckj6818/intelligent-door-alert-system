@@ -10,6 +10,8 @@ import {
   handleAlert,
   exportAlerts,
   deleteDevice,
+  addDevice,
+  updateDevice,
   getUserList,
   addOperatorUser,
   deleteOperatorUser,
@@ -404,23 +406,87 @@ const onLogout = () => {
 }
 
 const onAddDevice = () => {
-  ElMessage.info('设备添加功能（管理员专属）')
+  deviceFormMode.value = 'add'
+  deviceForm.id = null
+  deviceForm.deviceName = ''
+  deviceForm.location = ''
+  deviceForm.status = 1
+  deviceFormVisible.value = true
 }
 
 const onEditDevice = (row) => {
-  ElMessage.info(`编辑设备：${row.deviceName}（管理员专属）`)
+  deviceFormMode.value = 'edit'
+  deviceForm.id = row.id
+  deviceForm.deviceName = row.deviceName
+  deviceForm.location = row.location || ''
+  deviceForm.status = row.status ?? 1
+  deviceFormVisible.value = true
+}
+
+const onSubmitDeviceForm = async () => {
+  const deviceName = deviceForm.deviceName.trim()
+  const location = deviceForm.location.trim()
+  if (!deviceName) {
+    ElMessage.warning('请输入设备名称')
+    return
+  }
+
+  deviceFormLoading.value = true
+  try {
+    const payload = {
+      deviceName,
+      location,
+      status: deviceForm.status
+    }
+    if (deviceFormMode.value === 'add') {
+      await addDevice(payload)
+      ElMessage.success('设备添加成功')
+    } else {
+      await updateDevice(deviceForm.id, payload)
+      ElMessage.success('设备修改成功')
+    }
+    deviceFormVisible.value = false
+    await fetchDeviceList()
+    updateCharts()
+  } catch (error) {
+    console.error('保存设备失败', error)
+  } finally {
+    deviceFormLoading.value = false
+  }
 }
 
 const onDeleteDevice = async (row) => {
   try {
+    await ElMessageBox.confirm(
+      `确认删除设备「${row.deviceName}」吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
     await deleteDevice(row.id)
     ElMessage.success('设备已删除')
-    deviceList.value = deviceList.value.filter((item) => item.id !== row.id)
+    await fetchDeviceList()
     updateCharts()
   } catch (error) {
-    console.error('删除设备失败', error)
+    if (error !== 'cancel') {
+      console.error('删除设备失败', error)
+    }
   }
 }
+
+// ── 设备管理表单（ADMIN 专属） ──
+const deviceFormVisible = ref(false)
+const deviceFormLoading = ref(false)
+const deviceFormMode = ref('add')
+const deviceForm = reactive({
+  id: null,
+  deviceName: '',
+  location: '',
+  status: 1
+})
 
 // ── 安保人员账户管理（ADMIN 专属） ──
 const userManageVisible = ref(false)
@@ -867,6 +933,38 @@ onUnmounted(() => {
         <el-button @click="addUserVisible = false">取消</el-button>
         <el-button type="primary" :loading="addUserLoading" @click="onSubmitAddUser">
           确认添加
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 添加/编辑设备 -->
+    <el-dialog
+      v-model="deviceFormVisible"
+      class="user-manage-dialog add-user-dialog"
+      :title="deviceFormMode === 'add' ? '添加设备' : '编辑设备'"
+      width="460px"
+      destroy-on-close
+      append-to-body
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="90px" class="add-user-form">
+        <el-form-item label="设备名称" required>
+          <el-input v-model="deviceForm.deviceName" placeholder="如：前门摄像头-A01" clearable />
+        </el-form-item>
+        <el-form-item label="安装位置">
+          <el-input v-model="deviceForm.location" placeholder="如：1号楼正门入口" clearable />
+        </el-form-item>
+        <el-form-item label="运行状态">
+          <el-radio-group v-model="deviceForm.status">
+            <el-radio :value="1">在线</el-radio>
+            <el-radio :value="0">离线</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="deviceFormVisible = false">取消</el-button>
+        <el-button type="primary" :loading="deviceFormLoading" @click="onSubmitDeviceForm">
+          {{ deviceFormMode === 'add' ? '确认添加' : '保存修改' }}
         </el-button>
       </template>
     </el-dialog>

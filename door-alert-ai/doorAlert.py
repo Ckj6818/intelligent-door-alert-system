@@ -1,4 +1,5 @@
 import cv2
+import os
 import time
 import requests
 import threading
@@ -7,9 +8,14 @@ from ultralytics import YOLO
 
 # ================= 全局配置项 =================
 CONF_THRESHOLD = 0.5   # YOLO 检测置信度阈值
-# 端云协同上报配置
-BACKEND_UPLOAD_URL = "http://localhost:8081/api/alerts/upload"  # 严格匹配后端接口
-DEVICE_ID = 1          # 当前测试设备的固定编号
+# 端云协同上报配置（支持 Docker 环境变量覆盖）
+BACKEND_UPLOAD_URL = os.environ.get(
+    "BACKEND_UPLOAD_URL",
+    "http://localhost:8081/api/alerts/upload",
+)
+DEVICE_ID = int(os.environ.get("DEVICE_ID", "1"))  # 当前测试设备的固定编号
+HEADLESS = os.environ.get("HEADLESS", "0").strip() in ("1", "true", "yes")
+VIDEO_LOOP = os.environ.get("VIDEO_LOOP", "1").strip() in ("1", "true", "yes")
 
 # ================= 状态机与防抖控制 =================
 # 记录上一次上报时间戳，避免连续上报挤爆网络
@@ -23,7 +29,6 @@ FAILED_COUNTER = 0             # 连续失败计数器
 MAX_FAILED_ATTEMPTS = 3        # 最大连续失败次数
 
 
-import os
 import traceback
 
 def upload_alert_async(payload, image_path):
@@ -123,21 +128,78 @@ def render_alert_capture(frame, x1, y1, x2, y2, confidence, proximity_ratio):
     return annotated
 
 
+def resolve_video_source():
+    """
+    解析视频输入源，支持 Docker 多种部署方式：
+    - VIDEO_SOURCE=0 / 1           → 物理摄像头索引（Linux 容器需映射 /dev/video0）
+    - VIDEO_SOURCE=/app/demo/x.mp4 → 挂载的演示视频（Windows Docker 推荐）
+    - VIDEO_SOURCE=/app/demo/x.jpg → 静态图片循环检测（无摄像头时的答辩演示）
+    未设置时回退到 CAMERA_INDEX（默认 0）。
+    """
+    explicit = os.environ.get("VIDEO_SOURCE", "").strip()
+    if explicit:
+        if explicit.isdigit():
+            return "camera", int(explicit)
+        lower = explicit.lower()
+        if lower.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
+            return "image", explicit
+        return "file", explicit
+    return "camera", int(os.environ.get("CAMERA_INDEX", "0"))
+
+
+class FrameSource:
+    """统一封装摄像头 / 视频文件 / 静态图片三种输入。"""
+
+    def __init__(self):
+        self.mode, self.source = resolve_video_source()
+        self.cap = None
+        self.static_frame = None
+
+        if self.mode == "image":
+            self.static_frame = cv2.imread(self.source)
+            if self.static_frame is None:
+                raise RuntimeError(f"无法读取演示图片: {self.source}")
+            print(f"[INFO] 图片演示模式: {self.source}")
+            return
+
+        print(f"[INFO] 打开视频源 ({self.mode}): {self.source}")
+        self.cap = cv2.VideoCapture(self.source)
+        if not self.cap.isOpened():
+            hint = (
+                "Linux 容器请映射 devices: [/dev/video0:/dev/video0]；"
+                "Windows Docker 请改用 VIDEO_SOURCE=/app/demo/demo.mp4 或 .jpg"
+            )
+            raise RuntimeError(f"无法打开视频源: {self.source}。{hint}")
+
+    def read(self):
+        if self.mode == "image":
+            return True, self.static_frame.copy()
+
+        ret, frame = self.cap.read()
+        if not ret and self.mode == "file" and VIDEO_LOOP:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self.cap.read()
+        return ret, frame
+
+    def release(self):
+        if self.cap is not None:
+            self.cap.release()
+
+
 def main():
     global LAST_UPLOAD_TIME
 
     print("[INFO] 正在加载 YOLO 模型...")
     model = YOLO("yolov8m.pt")
-    
-    print("[INFO] 正在开启摄像头...")
-    cap = cv2.VideoCapture(0)
-    
-    if not cap.isOpened():
-        print("[ERROR] 无法打开摄像头！")
+
+    try:
+        frame_source = FrameSource()
+    except RuntimeError as exc:
+        print(f"[ERROR] {exc}")
         return
 
     while True:
-        ret, frame = cap.read()
+        ret, frame = frame_source.read()
         if not ret:
             print("[ERROR] 无法读取视频帧！")
             break
@@ -208,16 +270,18 @@ def main():
                             # 更新最后上报时间戳
                             LAST_UPLOAD_TIME = current_time
 
-        # 显示实时画面
-        cv2.imshow("Intelligent Door Alert System - Edge Node", frame)
+        # 显示实时画面（无 GUI 的容器环境可设置 HEADLESS=1 跳过）
+        if not HEADLESS:
+            cv2.imshow("Intelligent Door Alert System - Edge Node", frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("[INFO] 接收到退出指令，系统关闭...")
+                break
+        else:
+            time.sleep(0.01)
 
-        # 按下 'q' 键退出循环
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("[INFO] 接收到退出指令，系统关闭...")
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
+    frame_source.release()
+    if not HEADLESS:
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

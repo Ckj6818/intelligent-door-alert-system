@@ -11,6 +11,8 @@ CREATE DATABASE IF NOT EXISTS `intelligent_door_alert`
 
 USE `intelligent_door_alert`;
 
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+
 -- -----------------------------------------------------------
 -- 1. 系统用户表
 -- -----------------------------------------------------------

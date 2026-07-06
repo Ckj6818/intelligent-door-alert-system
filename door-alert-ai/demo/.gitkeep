@@ -1,0 +1,7 @@
+# 将演示素材放入此目录，供 Docker AI 容器挂载使用：
+#
+#   demo.mp4  — 推荐：循环播放的演示视频（Windows Docker 无法直连 USB 摄像头时使用）
+#   demo.jpg  — 备选：静态抓拍图，容器内循环做 YOLO 检测并上报告警
+#
+# docker-compose 默认读取 VIDEO_SOURCE=/app/demo/demo.mp4
+# 若只有图片，可设置环境变量 VIDEO_SOURCE=/app/demo/demo.jpg

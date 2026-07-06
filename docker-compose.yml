@@ -1,0 +1,79 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: door-alert-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: intelligent_door_alert
+      TZ: Asia/Shanghai
+    # 仅容器内网访问，避免与宿主机/其他 MySQL 占用的 3306 冲突
+    # ports:
+    #   - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/conf.d:/etc/mysql/conf.d:ro
+      - ./docs/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./docs/seed_data.sql:/docker-entrypoint-initdb.d/02-seed_data.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --default-authentication-plugin=mysql_native_password
+
+  backend:
+    build: ./door-alert-backend
+    container_name: door-alert-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/intelligent_door_alert?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_general_ci&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "123456"
+      TZ: Asia/Shanghai
+    ports:
+      - "8081:8081"
+    volumes:
+      - backend_uploads:/app/uploads
+
+  frontend:
+    build: ./door-alert-frontend
+    container_name: door-alert-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+
+  ai-service:
+    build: ./door-alert-ai
+    container_name: door-alert-ai
+    restart: unless-stopped
+    profiles:
+      - full
+    depends_on:
+      - backend
+    environment:
+      BACKEND_UPLOAD_URL: http://backend:8081/api/alerts/upload
+      DEVICE_ID: "1"
+      HEADLESS: "1"
+      VIDEO_LOOP: "1"
+      # Windows Docker 无法直连 USB 摄像头：默认用挂载的 demo.jpg / demo.mp4 做答辩演示
+      VIDEO_SOURCE: /app/demo/demo.jpg
+      # Linux 物理摄像头模式见 docker-compose.camera.yml
+    volumes:
+      - ./door-alert-ai/demo:/app/demo:ro
+    # Linux 宿主机物理摄像头（Windows 请用上面的 demo 视频/图片）：
+    # devices:
+    #   - /dev/video0:/dev/video0
+
+volumes:
+  mysql_data:
+  backend_uploads:

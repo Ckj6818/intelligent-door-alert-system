@@ -53,6 +53,24 @@ export function deleteDevice(id) {
   })
 }
 
+/** 新增设备（管理员专属） */
+export function addDevice(data) {
+  return request({
+    url: '/devices',
+    method: 'post',
+    data
+  })
+}
+
+/** 修改设备（管理员专属） */
+export function updateDevice(id, data) {
+  return request({
+    url: `/devices/${id}`,
+    method: 'put',
+    data
+  })
+}
+
 /**
  * 处理告警（将 status 从 0 更新为 1）
  * @param {number} id - 告警记录主键 ID

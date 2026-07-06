@@ -1,0 +1,11 @@
+# Linux / WSL2 物理摄像头模式（取消 devices 注释后使用）
+# 用法: docker compose -f docker-compose.yml -f docker-compose.camera.yml --profile full up -d ai-service
+
+services:
+  ai-service:
+    environment:
+      VIDEO_SOURCE: "0"
+      CAMERA_INDEX: "0"
+      HEADLESS: "1"
+    devices:
+      - /dev/video0:/dev/video0

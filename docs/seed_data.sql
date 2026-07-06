@@ -6,6 +6,8 @@
 
 USE `intelligent_door_alert`;
 
+SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
+
 -- 清空旧告警，保留用户与设备
 TRUNCATE TABLE `alert_log`;
 
