@@ -53,4 +53,9 @@ public interface AlertLogService extends IService<AlertLog> {
      * 从回收站中恢复已逻辑删除的记录
      */
     boolean restoreAlert(Long id);
+
+    /**
+     * 永久清空回收站中所有的逻辑删除记录
+     */
+    boolean permanentClearRecycleBin();
 }

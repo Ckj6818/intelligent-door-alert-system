@@ -100,6 +100,15 @@ public class AlertLogController {
     }
 
     /**
+     * 永久清空回收站中所有的逻辑删除记录
+     */
+    @DeleteMapping("/recycle-bin/clear")
+    @SaCheckRole("ADMIN")
+    public Result<Boolean> clearRecycleBin() {
+        return Result.success(alertLogService.permanentClearRecycleBin());
+    }
+
+    /**
      * 恢复已逻辑删除的记录
      */
     @PutMapping("/{id:\\d+}/restore")

@@ -184,4 +184,12 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
                .set(AlertLog::getDeleteTime, null);
         return this.update(wrapper);
     }
+
+    @Override
+    public boolean permanentClearRecycleBin() {
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 1);
+        return this.remove(wrapper);
+    }
 }

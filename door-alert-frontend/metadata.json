@@ -1,0 +1,6 @@
+{
+  "name": "Door Alert Admin Console",
+  "description": "Enterprise AI security control center for managing real-time video surveillance, classification alerts, and node telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
