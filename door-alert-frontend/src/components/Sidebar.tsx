@@ -17,12 +17,17 @@ interface SidebarProps {
   username: string;
   onLogout: () => void;
 }export default function Sidebar({ activeTab, setActiveTab, username, onLogout }: SidebarProps) {
+  const role = localStorage.getItem('user_role') || 'OPERATOR';
   const navItems = [
     { id: 'dashboard' as Tab, label: '系统运行大屏', icon: LayoutDashboard },
     { id: 'workflow' as Tab, label: '报警处置流程', icon: GitFork },
-    { id: 'reports' as Tab, label: '系统报表管理', icon: FilePieChart },
-    { id: 'settings' as Tab, label: '系统参数设置', icon: Settings },
   ];
+  if (role === 'ADMIN') {
+    navItems.push(
+      { id: 'reports' as Tab, label: '系统报表管理', icon: FilePieChart },
+      { id: 'settings' as Tab, label: '系统参数设置', icon: Settings }
+    );
+  }
 
   return (
     <aside className="fixed left-0 top-0 h-full w-[280px] bg-cyber-surface/90 backdrop-blur-xl border-r border-outline-variant/20 shadow-[0_0_30px_rgba(0,218,243,0.08)] flex flex-col py-6 z-50">

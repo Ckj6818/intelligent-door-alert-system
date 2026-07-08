@@ -25,9 +25,9 @@ interface ReportsTabProps {
 export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   // Nodes telemetry state
   const [nodes, setNodes] = useState<NodeReport[]>([
-    { nodeId: 'SEC-ALPHA-01', dataType: 'Entry Logs', totalEvents: 1248, criticality: 'LOW', avgResponse: '1.2s', lastAggregation: '10m ago' },
-    { nodeId: 'SEC-BETA-09', dataType: 'Biometric Fluctuation', totalEvents: 42, criticality: 'HIGH', avgResponse: '0.4s', lastAggregation: '2m ago' },
-    { nodeId: 'CAM-GRID-04', dataType: 'Motion Analytics', totalEvents: 8931, criticality: 'MED', avgResponse: '0.8s', lastAggregation: '35s ago' }
+    { nodeId: 'SEC-ALPHA-01', dataType: '门禁出入日志', totalEvents: 1248, criticality: 'LOW', avgResponse: '1.2秒', lastAggregation: '10分钟前' },
+    { nodeId: 'SEC-BETA-09', dataType: '生物特征识别波动', totalEvents: 42, criticality: 'HIGH', avgResponse: '0.4秒', lastAggregation: '2分钟前' },
+    { nodeId: 'CAM-GRID-04', dataType: '画面运动分析', totalEvents: 8931, criticality: 'MED', avgResponse: '0.8秒', lastAggregation: '35秒前' }
   ]);
 
   const handleExportSpreadsheet = async () => {
@@ -37,13 +37,19 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
         alert('No alert logs available for export.');
         return;
       }
-      const rows = records.map((item: any) => ({
-        '告警时间': new Date(item.createTime).toLocaleString(),
-        '设备ID': item.deviceId,
-        '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
-        '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
-        '状态': item.status === 1 ? '已处理' : '未处理'
-      }));
+      const rows = records.map((item: any) => {
+        const imgUrl = item.imageUrl 
+          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${window.location.origin.replace(':3000', ':8081')}${item.imageUrl}`)
+          : '-';
+        return {
+          '告警时间': new Date(item.createTime).toLocaleString(),
+          '设备ID': item.deviceId,
+          '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
+          '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
+          '图片链接': imgUrl,
+          '状态': item.status === 1 ? '已处理' : '未处理'
+        };
+      });
       const worksheet = XLSX.utils.json_to_sheet(rows);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录');

@@ -30,10 +30,15 @@ service.interceptors.response.use(
 
     const message = res?.message || res?.msg || 'Request failed, please try again later';
 
-    if (res?.code === 401 || res?.code === 403) {
+    if (res?.code === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user_role');
       window.dispatchEvent(new Event('auth-expired'));
+      return Promise.reject(new Error(message));
+    }
+
+    if (res?.code === 403) {
+      alert(message || '权限不足，拒绝访问');
       return Promise.reject(new Error(message));
     }
 
@@ -59,10 +64,15 @@ service.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (status === 401 || status === 403) {
+    if (status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user_role');
       window.dispatchEvent(new Event('auth-expired'));
+      return Promise.reject(new Error(rawMsg || msg));
+    }
+
+    if (status === 403) {
+      alert(rawMsg || msg || '权限不足，拒绝访问');
       return Promise.reject(new Error(rawMsg || msg));
     }
 
