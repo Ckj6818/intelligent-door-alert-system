@@ -1,6 +1,6 @@
 # 智能门禁安防可视化管理平台
 
-基于 YOLOv8m 的实时 Door Alert 系统 — 前后端分离毕业设计项目。
+基于 YOLOv8m 的实时 Door Alert 系统 — React + Spring Boot 前后端分离毕业设计项目。
 
 ## 项目结构
 
@@ -8,7 +8,7 @@
 intelligent-door-alert-system/
 ├── door-alert-ai/          # AI 检测服务（YOLOv8m）
 ├── door-alert-backend/     # Spring Boot 3 后端
-├── door-alert-frontend/    # Vue 3 前端
+├── door-alert-frontend/    # React + TypeScript 前端
 └── docs/                   # 数据库脚本与 API 设计文档
 ```
 
@@ -18,7 +18,7 @@ intelligent-door-alert-system/
 |------|------|
 | AI 检测 | Python, YOLOv8m, OpenCV |
 | 后端 | Spring Boot 3, MyBatis-Plus, MySQL |
-| 前端 | Vue 3, Vite |
+| 前端 | React, TypeScript, Vite |
 
 ## 快速启动
 
