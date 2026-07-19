@@ -1,19 +1,29 @@
 import React, { useState } from 'react';
 import { 
-  Sliders, 
   Cpu, 
   BellRing, 
   Database, 
-  Camera, 
   ShieldCheck, 
   RefreshCw,
   Terminal,
-  Activity
 } from 'lucide-react';
+import { updateCleanupPolicy } from '@/api/index';
 
 interface SettingsTabProps {
   onThresholdChange?: (val: number) => void;
 }
+
+const PURGE_POLICY_LABELS: Record<string, string> = {
+  '24h': '每 24 小时',
+  '7d': '每 7 天',
+  never: '从不自动清理（仅手动清除）',
+};
+
+const PURGE_POLICY_DAYS: Record<string, number> = {
+  '24h': 1,
+  '7d': 7,
+  never: -1,
+};
 
 export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
   const [yoloModel, setYoloModel] = useState('YOLOv8m');
@@ -23,12 +33,35 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
   const [encryptionStandard, setEncryptionStandard] = useState('AES-256');
   const [activeFeedsCount, setActiveFeedsCount] = useState(32);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (onThresholdChange) {
       onThresholdChange(threshold / 100);
     }
-    alert(`控制台参数已成功应用！当前模型：${yoloModel}，置信度阈值：${threshold}%。`);
+
+    let cleanupSynced = false;
+    try {
+      await updateCleanupPolicy({
+        policy: autoPurge,
+        intervalDays: PURGE_POLICY_DAYS[autoPurge] ?? 1,
+      });
+      cleanupSynced = true;
+    } catch (error) {
+      console.warn('[Settings] cleanup policy sync failed:', error);
+    }
+
+    const purgeLabel = PURGE_POLICY_LABELS[autoPurge] ?? autoPurge;
+    const cleanupStatus = cleanupSynced
+      ? `逻辑删除缓冲区清理策略「${purgeLabel}」已同步至后端配置节点。`
+      : `逻辑删除缓冲区清理策略「${purgeLabel}」已在控制台登记；后端同步暂不可用，本地预览策略仍生效。`;
+
+    alert(
+      `策略配置已分发。\n\n` +
+      `${cleanupStatus}\n` +
+      `神经网络推理参数（边缘节点本地预览）：模型 ${yoloModel}，置信度阈值 ${threshold}%。\n` +
+      `上述 AI 参数尚未下发至物理推理引擎，仅供运维界面演示。`
+    );
   };
 
   return (

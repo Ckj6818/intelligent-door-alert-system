@@ -178,3 +178,16 @@ export function resetOperatorPassword(id: string | number): Promise<any> {
     method: 'post',
   });
 }
+
+/** 自动清理逻辑删除记录策略 */
+export function updateCleanupPolicy(data: {
+  policy: string;
+  intervalDays: number;
+}): Promise<any> {
+  return request({
+    url: '/config/cleanup-policy',
+    method: 'post',
+    data,
+    skipErrorAlert: true,
+  } as any);
+}
