@@ -1,8 +1,4 @@
-import axios, { type InternalAxiosRequestConfig } from 'axios';
-
-type RequestConfig = InternalAxiosRequestConfig & {
-  skipErrorAlert?: boolean;
-};
+import axios from 'axios';
 
 const service = axios.create({
   baseURL: '/api',
@@ -42,20 +38,14 @@ service.interceptors.response.use(
     }
 
     if (res?.code === 403) {
-      if (!(response.config as RequestConfig).skipErrorAlert) {
-        alert(message || '权限不足，拒绝访问');
-      }
+      alert(message || '权限不足，拒绝访问');
       return Promise.reject(new Error(message));
     }
 
-    if (!(response.config as RequestConfig).skipErrorAlert) {
-      alert(message);
-    }
+    alert(message);
     return Promise.reject(new Error(message));
   },
   (error) => {
-    const config = error.config as RequestConfig | undefined;
-    const skipErrorAlert = config?.skipErrorAlert;
     const status = error.response?.status;
     const rawMsg = error.response?.data?.message || error.message || '';
     const messageMap: Record<number, string> = {
@@ -82,15 +72,11 @@ service.interceptors.response.use(
     }
 
     if (status === 403) {
-      if (!skipErrorAlert) {
-        alert(rawMsg || msg || '权限不足，拒绝访问');
-      }
+      alert(rawMsg || msg || '权限不足，拒绝访问');
       return Promise.reject(new Error(rawMsg || msg));
     }
 
-    if (!skipErrorAlert) {
-      alert(msg);
-    }
+    alert(msg);
     return Promise.reject(error);
   }
 );
