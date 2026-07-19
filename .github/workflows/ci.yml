@@ -1,0 +1,68 @@
+# ==============================================================
+# GitHub Actions CI 流水线
+# 触发条件：push / PR 到 main, master, dev 分支
+# ==============================================================
+name: CI
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+
+jobs:
+  # ----------------------------------------------------------------
+  # Job 1: 后端构建 & 单元测试
+  # ----------------------------------------------------------------
+  backend-build:
+    name: Backend Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Build & Test with Maven
+        run: mvn clean package -DskipTests=false --batch-mode --no-transfer-progress
+        working-directory: ./door-alert-backend
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: door-alert-backend/target/surefire-reports/
+          retention-days: 7
+
+  # ----------------------------------------------------------------
+  # Job 2: 前端构建
+  # ----------------------------------------------------------------
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: door-alert-frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ./door-alert-frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: ./door-alert-frontend

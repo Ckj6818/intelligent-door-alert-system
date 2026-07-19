@@ -91,6 +91,76 @@ python doorAlert.py
 
 ---
 
+### 方式三：容器化一键部署（Docker · Linux / macOS / WSL2）
+
+适用于无需在本机安装 JDK、Maven、Node.js、Python 与 MySQL 的跨平台场景。项目根目录已提供 `docker-compose.yml`、`docker-compose.camera.yml`，以及 `door-alert-backend/`、`door-alert-frontend/`、`door-alert-ai/` 各自的 `Dockerfile`。
+
+**前置条件：**
+
+- 已安装 [Docker Engine](https://docs.docker.com/engine/install/)（建议 20.10+）
+- 已安装 Docker Compose V2（Docker Desktop 自带；Linux 可安装 `docker-compose-plugin`）
+- 首次构建需联网下载镜像与依赖，请预留数 GB 磁盘空间
+
+**一键启动核心基础服务（MySQL + 后端 + 前端）：**
+
+在项目根目录执行：
+
+```bash
+docker-compose up -d --build
+```
+
+- 数据库表结构与演示数据会在 MySQL 容器**首次启动**时，通过挂载的 `docs/schema.sql`、`docs/seed_data.sql` 自动初始化，无需手动导入。
+- 默认**不**启动 AI 检测容器（`ai-service` 使用 Compose `full` profile）；适合先验证登录与大屏功能。
+
+**可选：启动边缘 AI 视觉检测容器**
+
+**Demo 模式**（使用 `door-alert-ai/demo/` 下的图片或视频，Windows / macOS / Linux 均可）：
+
+```bash
+docker compose --profile full up -d --build
+```
+
+**Linux 物理摄像头模式**（挂载 `/dev/video0`）：
+
+```bash
+docker-compose -f docker-compose.camera.yml up -d --build
+```
+
+若仅使用上述命令无法拉起完整服务栈，请改用与根目录 `docker-compose.yml` 合并的写法（推荐）：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.camera.yml --profile full up -d --build
+```
+
+**服务可用性验证：**
+
+| 服务 | 地址 | 验证方式 |
+|------|------|----------|
+| 前端 UI | http://localhost:5173/login | 浏览器打开登录页，使用下方测试账号登录 |
+| 后端 API | http://localhost:8081 | 访问 `http://localhost:8081/actuator/health`，应返回 `{"status":"UP"}` |
+| AI 检测（可选） | 容器 `door-alert-ai` | 执行 `docker compose logs -f ai-service`，日志中出现心跳与告警上报即表示运行正常 |
+
+**常用运维命令：**
+
+```bash
+# 查看运行状态
+docker compose ps
+
+# 查看后端 / 前端 / AI 日志
+docker compose logs -f backend frontend ai-service
+
+# 停止并移除容器（数据卷 mysql_data 会保留）
+docker compose down
+```
+
+**说明：**
+
+- Docker 模式下 MySQL 仅在容器内网暴露，不占用宿主机 3306，避免与本机已有 MySQL 冲突。
+- Windows 宿主机无法将 USB 摄像头直通进容器，请使用 Demo 模式或方式一 / 方式二在本机运行 AI 脚本。
+- 测试账号与方式一相同：`admin / 123456`（管理员）、`security / 123456`（安保值班员）。
+
+---
+
 ## 数据库
 
 执行 `docs/schema.sql` 初始化数据库表结构；可选执行 `docs/seed_data.sql` 导入演示告警数据。

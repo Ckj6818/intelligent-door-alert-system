@@ -37,9 +37,10 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
         alert('No alert logs available for export.');
         return;
       }
+      const backendOrigin = `${window.location.protocol}//${window.location.hostname}:8081`;
       const rows = records.map((item: any) => {
         const imgUrl = item.imageUrl 
-          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${window.location.origin.replace(':3000', ':8081')}${item.imageUrl}`)
+          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${backendOrigin}${item.imageUrl}`)
           : '-';
         return {
           '告警时间': new Date(item.createTime).toLocaleString(),

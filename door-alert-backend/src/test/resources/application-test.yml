@@ -1,0 +1,37 @@
+# ==============================================================
+# Test Profile — 使用 H2 内存数据库, 避免依赖外部 MySQL
+# ==============================================================
+server:
+  port: 0  # 随机端口，避免测试端口冲突
+
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:test_door_alert;DB_CLOSE_DELAY=-1;MODE=MySQL
+    username: sa
+    password:
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto
+  configuration:
+    map-underscore-to-camel-case: true
+
+# Sa-Token 测试用配置
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  timeout: 86400
+  active-timeout: -1
+  is-concurrent: true
+  is-share: false
+  is-read-header: true
+  is-read-cookie: false
+  jwt-secret-key: test-jwt-secret-key
+
+# 设备心跳监控
+device:
+  heartbeat:
+    timeout-seconds: 30
