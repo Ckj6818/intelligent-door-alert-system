@@ -217,19 +217,15 @@ export default function AlertWorkflowTab({
   };
 
   const handleClearTrashPermanently = () => {
-    if (trashItems.length === 0) {
-      alert('回收站已清空，无需操作。');
-      return;
-    }
-    if (confirm('您确定要永久清除回收站中的所有安全追踪记录吗？此操作将清空本地数据库缓存，且无法撤销。')) {
+    if (confirm('您确定要永久清除回收站中的所有安全追踪记录吗？此操作将清空数据库归档且无法撤销。')) {
       clearRecycleBinPermanently()
         .then(() => {
           setTrashItems([]);
-          alert('审计痕迹已从数据库中永久清除。');
+          alert('回收站记录已从数据库中永久清除。');
         })
         .catch(err => {
           console.error('Failed to clear recycle bin', err);
-          alert('清空失败，请确认后端运行正常！');
+          alert('清空失败：请确认拥有管理员权限或后端正常运行。');
         });
     }
   };
@@ -563,16 +559,14 @@ export default function AlertWorkflowTab({
           <div className="flex flex-wrap gap-4 pt-4 border-t border-outline-variant/10 font-sans">
             <button
               onClick={handleLogicDeleteAll}
-              disabled={alerts.length === 0}
-              className="px-5 py-2 bg-cyber-surface-high border border-outline-variant/20 text-on-surface text-xs hover:bg-cyber-surface-highest hover:border-cyber-error/40 transition-all rounded flex items-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+              className="px-5 py-2 bg-cyber-surface-high border border-outline-variant/20 text-on-surface text-xs hover:bg-cyber-surface-highest hover:border-cyber-error/40 transition-all rounded flex items-center gap-2 cursor-pointer active:scale-95"
             >
               <Layers className="w-4 h-4" />
               逻辑删除当前全部
             </button>
             <button
               onClick={handleRestoreAll}
-              disabled={trashItems.length === 0}
-              className="px-5 py-2 bg-cyber-surface-high border border-outline-variant/20 text-on-surface text-xs hover:bg-cyber-surface-highest hover:border-cyber-primary/40 transition-all rounded flex items-center gap-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+              className="px-5 py-2 bg-cyber-surface-high border border-outline-variant/20 text-on-surface text-xs hover:bg-cyber-surface-highest hover:border-cyber-primary/40 transition-all rounded flex items-center gap-2 cursor-pointer active:scale-95"
             >
               <History className="w-4 h-4" />
               恢复全部记录
@@ -580,8 +574,7 @@ export default function AlertWorkflowTab({
             <div className="flex-1" />
             <button
               onClick={handleClearTrashPermanently}
-              disabled={trashItems.length === 0}
-              className="px-6 py-2 bg-cyber-error-dim/15 border border-cyber-error/40 text-cyber-error hover:bg-cyber-error hover:text-white transition-all rounded font-bold text-xs flex items-center gap-2 group disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+              className="px-6 py-2 bg-cyber-error-dim/15 border border-cyber-error/40 text-cyber-error hover:bg-cyber-error hover:text-white transition-all rounded font-bold text-xs flex items-center gap-2 group cursor-pointer active:scale-95 shadow-md"
             >
               <Trash2 className="w-4 h-4 group-hover:scale-110 transition-transform" />
               永久清空回收站

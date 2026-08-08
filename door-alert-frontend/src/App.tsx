@@ -81,20 +81,18 @@ export default function App() {
     }).catch(err => console.error('Failed to fetch alerts', err));
 
     // Recycle Bin (Trash)
-    const role = localStorage.getItem('user_role') || 'OPERATOR';
-    if (role === 'ADMIN') {
-      getRecycleBin().then((res: any) => {
-        const list = res || [];
-        const mappedTrash: TrashItem[] = list.map((item: any) => ({
-          id: String(item.id),
-          name: `${item.deviceName || '摄像机'}_告警日志_${item.id}`,
-          deletedTime: '已删除于 ' + new Date(item.updateTime || item.createTime).toLocaleDateString()
-        }));
-        setTrashItems(mappedTrash.slice(0, 24));
-      }).catch(err => console.error('Failed to fetch recycle bin', err));
-    } else {
+    getRecycleBin().then((res: any) => {
+      const list = res || [];
+      const mappedTrash: TrashItem[] = list.map((item: any) => ({
+        id: String(item.id),
+        name: `${item.deviceName || '摄像机'}_告警日志_${item.id}`,
+        deletedTime: '已删除于 ' + new Date(item.updateTime || item.createTime).toLocaleDateString()
+      }));
+      setTrashItems(mappedTrash.slice(0, 24));
+    }).catch(err => {
+      console.warn('Recycle bin fetch skipped or restricted:', err);
       setTrashItems([]);
-    }
+    });
   };
 
   useEffect(() => {

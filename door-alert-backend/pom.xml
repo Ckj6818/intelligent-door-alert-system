@@ -77,6 +77,12 @@
             <version>${sa-token.version}</version>
         </dependency>
 
+        <!-- BCrypt 密码加密（仅引入加密模块，不引入 Spring Security 全家桶） -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <!-- Spring Boot Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

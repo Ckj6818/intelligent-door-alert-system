@@ -159,10 +159,10 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     public List<AlertLogVO> listRecycleBin() {
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
-        // 查询已删除，且删除时间在 15 天内的记录
+        // 查询已删除，且删除时间在 15 天内（或为空）的记录
         java.time.LocalDateTime limitTime = java.time.LocalDateTime.now().minusDays(15);
         wrapper.eq(AlertLog::getDeleted, 1)
-               .ge(AlertLog::getDeleteTime, limitTime)
+               .and(w -> w.ge(AlertLog::getDeleteTime, limitTime).or().isNull(AlertLog::getDeleteTime))
                .orderByDesc(AlertLog::getDeleteTime);
         return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
     }
@@ -175,8 +175,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         }
         entity.setDeleted(0);
         
-        // MyBatis-Plus 默认可能不更新为 null 的字段，我们需要用 UpdateWrapper 或者手动设置一个占位符，
-        // 这里使用 LambdaUpdateWrapper 来显式把 delete_time 更新为 null
+        // 使用 LambdaUpdateWrapper 显式把 delete_time 更新为 null
         com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper = 
                 new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
         wrapper.eq(AlertLog::getId, id)
@@ -190,6 +189,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
         wrapper.eq(AlertLog::getDeleted, 1);
-        return this.remove(wrapper);
+        this.remove(wrapper);
+        return true;
     }
 }

@@ -10,12 +10,16 @@ import com.dooralert.satoken.RbacHelper;
 import com.dooralert.vo.LoginVO;
 import com.dooralert.vo.SysUserVO;
 import cn.dev33.satoken.stp.StpUtil;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
+
+    /** BCrypt 密码编码器（线程安全） */
+    private static final BCryptPasswordEncoder PASSWORD_ENCODER = new BCryptPasswordEncoder();
 
     @Override
     public List<SysUserVO> listOperators() {
@@ -47,7 +51,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
 
         SysUser entity = new SysUser();
         entity.setUsername(username);
-        entity.setPassword(dto.getPassword());
+        entity.setPassword(PASSWORD_ENCODER.encode(dto.getPassword()));
         entity.setNickname(
                 dto.getNickname() == null || dto.getNickname().isBlank() ? username : dto.getNickname().trim()
         );
@@ -95,7 +99,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         if (RbacHelper.isAdmin(entity)) {
             throw new RuntimeException("不允许重置管理员密码");
         }
-        entity.setPassword("123456");
+        entity.setPassword(PASSWORD_ENCODER.encode("123456"));
         return this.updateById(entity);
     }
 
@@ -108,7 +112,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
                 .eq(SysUser::getUsername, username)
                 .one();
 
-        if (user == null || !user.getPassword().equals(password)) {
+        if (user == null || !PASSWORD_ENCODER.matches(password, user.getPassword())) {
             throw new RuntimeException("用户名或密码错误");
         }
 

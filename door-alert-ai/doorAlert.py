@@ -355,8 +355,12 @@ def main():
         print(f"[ERROR] {exc}")
         return
 
+    is_image_mode = frame_source.mode == "image"
+
     print(f"[INFO] 心跳地址: {BACKEND_HEARTBEAT_URL}，间隔 {HEARTBEAT_INTERVAL}s")
     print(f"[INFO] 告警冷却窗口: {COOL_DOWN_INTERVAL}s，上报地址: {BACKEND_UPLOAD_URL}")
+    if is_image_mode:
+        print("[INFO] 当前为静态图片演示模式，仅执行一次检测与告警上报")
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     send_heartbeat()
 
@@ -366,6 +370,10 @@ def main():
     detections_lock = threading.Lock()
     running = True
     last_inference_time = 0.0
+
+    # --- 图片演示模式：跑一次 YOLO 即可，无需后台推理线程持续空转 ---
+    demo_alert_sent = False  # 演示模式下是否已发送过告警
+    demo_detections = []     # 演示模式下缓存的检测结果
 
     def yolo_inference_thread():
         nonlocal latest_frame, running, active_detections, last_inference_time
@@ -408,6 +416,114 @@ def main():
 
             time.sleep(0.015)
 
+    if is_image_mode:
+        # 图片模式：同步跑一次 YOLO 推理，缓存结果，不启动推理线程
+        ret, frame = frame_source.read()
+        if not ret:
+            print("[ERROR] 无法读取演示图片！")
+            frame_source.release()
+            return
+
+        print("[INFO] 正在对演示图片执行 YOLO 推理...")
+        results = model(frame, conf=CONF_THRESHOLD, verbose=False)
+        h, w = frame.shape[:2]
+        frame_area = w * h
+
+        for result in results:
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                if cls_id == 0:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    confidence = float(box.conf[0])
+                    bb_area = (x2 - x1) * (y2 - y1)
+                    proximity_ratio = bb_area / frame_area
+                    danger_level = 3 if proximity_ratio >= 0.4 else 2
+                    demo_detections.append({
+                        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                        "confidence": confidence,
+                        "proximity_ratio": proximity_ratio,
+                        "danger_level": danger_level,
+                    })
+
+        if demo_detections:
+            print(f"[INFO] 演示图片检测到 {len(demo_detections)} 个目标")
+        else:
+            print("[INFO] 演示图片未检测到目标")
+
+        # 发送一次告警
+        primary_det = pick_primary_detection(demo_detections)
+        if primary_det is not None:
+            frame_clean = frame.copy()
+            x1, y1 = primary_det["x1"], primary_det["y1"]
+            x2, y2 = primary_det["x2"], primary_det["y2"]
+            confidence = primary_det["confidence"]
+            proximity_ratio = primary_det["proximity_ratio"]
+            danger_level = primary_det["danger_level"]
+
+            audible_beep()
+            capture_frame = render_alert_capture(
+                frame_clean, x1, y1, x2, y2, confidence,
+            )
+            threading.Thread(
+                target=save_and_post_alert_async,
+                args=(capture_frame, DEVICE_ID, proximity_ratio, danger_level),
+                daemon=True,
+            ).start()
+            last_alert_time = time.time()
+            demo_alert_sent = True
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] "
+                f"演示模式：已上报一次告警（后续不再重复上报）"
+            )
+
+        # 图片演示模式：持续显示带标注的画面，等待用户按 q 退出
+        print("[INFO] 演示模式展示中，按 'q' 键退出...")
+        while True:
+            display = frame.copy()
+
+            # 绘制检测框
+            for det in demo_detections:
+                draw_live_detection(
+                    display,
+                    det["x1"], det["y1"], det["x2"], det["y2"],
+                    det["confidence"],
+                    in_cooldown=demo_alert_sent,
+                )
+
+            if primary_det is not None:
+                cv2.putText(
+                    display, "WARNING: TOO CLOSE!", (50, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3,
+                )
+
+            # 显示演示模式水印
+            cv2.putText(
+                display, "[DEMO MODE] Press 'q' to exit",
+                (10, display.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2,
+            )
+            if demo_alert_sent:
+                cv2.putText(
+                    display, "Alert uploaded (1/1) - No camera detected",
+                    (10, display.shape[0] - 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 200), 1,
+                )
+
+            if not HEADLESS:
+                cv2.imshow("Intelligent Door Alert System - Edge Node", display)
+                key = cv2.waitKey(200) & 0xFF
+                if key == ord("q"):
+                    print("[INFO] 接收到退出指令，系统关闭...")
+                    break
+            else:
+                time.sleep(1)
+
+        frame_source.release()
+        if not HEADLESS:
+            cv2.destroyAllWindows()
+        return
+
+    # ==================== 正常摄像头 / 视频模式 ====================
     threading.Thread(target=yolo_inference_thread, daemon=True).start()
 
     while True:
@@ -484,3 +600,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

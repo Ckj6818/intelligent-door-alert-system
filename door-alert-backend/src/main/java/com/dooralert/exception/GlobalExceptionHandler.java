@@ -27,4 +27,17 @@ public class GlobalExceptionHandler {
     public Result<Void> handleNotRole(NotRoleException e) {
         return Result.error(403, "权限不足，拒绝访问！");
     }
+
+    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
+    public Result<Void> handleValidation(org.springframework.web.bind.MethodArgumentNotValidException e) {
+        String msg = e.getBindingResult().getFieldErrors().stream()
+                .map(org.springframework.validation.FieldError::getDefaultMessage)
+                .collect(java.util.stream.Collectors.joining("; "));
+        return Result.error(400, msg);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public Result<Void> handleGeneral(Exception e) {
+        return Result.error(500, "系统内部错误，请联系管理员");
+    }
 }

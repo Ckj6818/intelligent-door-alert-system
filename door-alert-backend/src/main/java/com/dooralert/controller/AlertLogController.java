@@ -105,7 +105,7 @@ public class AlertLogController {
     @DeleteMapping("/recycle-bin/clear")
     @SaCheckRole("ADMIN")
     public Result<Boolean> clearRecycleBin() {
-        return Result.success(alertLogService.permanentClearRecycleBin());
+        return Result.success("回收站已永久清空", alertLogService.permanentClearRecycleBin());
     }
 
     /**

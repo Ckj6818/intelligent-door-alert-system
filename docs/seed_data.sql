@@ -11,16 +11,20 @@ SET NAMES utf8mb4 COLLATE utf8mb4_general_ci;
 -- 清空旧告警，保留用户与设备
 TRUNCATE TABLE `alert_log`;
 
--- 确保基础设备存在（幂等）
-INSERT IGNORE INTO `sys_device` (`id`, `device_name`, `location`, `status`) VALUES
+-- 确保基础设备存在且名字正常（幂等更新）
+INSERT INTO `sys_device` (`id`, `device_name`, `location`, `status`) VALUES
 (1, '前门摄像头-A01', '1号楼正门入口', 1),
 (2, '后门摄像头-B01', '1号楼后门通道', 1),
-(3, '侧门摄像头-C01', '2号楼侧门', 0);
+(3, '侧门摄像头-C01', '2号楼侧门', 0)
+ON DUPLICATE KEY UPDATE
+    `device_name` = VALUES(`device_name`),
+    `location` = VALUES(`location`),
+    `status` = VALUES(`status`);
 
--- 确保管理员与安保账号存在，并统一角色枚举为 ADMIN / OPERATOR
+-- 确保管理员与安保账号存在，并统一角色枚举为 ADMIN / OPERATOR（密码: 123456）
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', '123456', '系统管理员', 'ADMIN'),
-('security', '123456', '安保值班员', 'OPERATOR')
+('admin',    '$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36PmSP2vnNP6pVBkBi9Ge1y', '系统管理员', 'ADMIN'),
+('security', '$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36PmSP2vnNP6pVBkBi9Ge1y', '安保值班员', 'OPERATOR')
 ON DUPLICATE KEY UPDATE
     `password` = VALUES(`password`),
     `nickname` = VALUES(`nickname`),

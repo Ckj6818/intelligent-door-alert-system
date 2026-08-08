@@ -53,6 +53,8 @@ CREATE TABLE `alert_log` (
     `danger_level`    INT           NOT NULL DEFAULT 0      COMMENT '危险等级（0-安全, 1-注意, 2-警告, 3-危险）',
     `status`          TINYINT       NOT NULL DEFAULT 0      COMMENT '处理状态（0-未处理, 1-已处理）',
     `create_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `deleted`         TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除（0-未删除, 1-已删除）',
+    `delete_time`     DATETIME      DEFAULT NULL COMMENT '逻辑删除时间',
     PRIMARY KEY (`id`),
     KEY `idx_device_id` (`device_id`),
     KEY `idx_create_time` (`create_time`)
@@ -62,11 +64,11 @@ CREATE TABLE `alert_log` (
 -- 基础测试数据
 -- ============================================================
 
--- 管理员账号（密码: 123456）
+-- 密码均使用 BCrypt 加密存储（原始密码见注释，仅供答辩演示用）
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin', '123456', '系统管理员', 'ADMIN'),
-('security', '123456', '安保值班员', 'OPERATOR'),
-('operator', 'operator123', '值班员张三', 'OPERATOR');
+('admin',    '$2b$12$DBBLgfeT0jFbnkJl1R4KIuWArHLMd77bM6tnBsgP0VdNjyicR65KK', '系统管理员', 'ADMIN'),       -- 密码: 123456
+('security', '$2b$12$DBBLgfeT0jFbnkJl1R4KIuWArHLMd77bM6tnBsgP0VdNjyicR65KK', '安保值班员', 'OPERATOR'),    -- 密码: 123456
+('operator', '$2b$12$DBBLgfeT0jFbnkJl1R4KIuWArHLMd77bM6tnBsgP0VdNjyicR65KK', '值班员张三', 'OPERATOR');    -- 密码: 123456
 
 -- 测试设备（前门 / 后门 / 侧门）
 INSERT INTO `sys_device` (`device_name`, `location`, `status`) VALUES
