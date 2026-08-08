@@ -24,7 +24,7 @@ interface SidebarProps {
   ];
   if (role === 'ADMIN') {
     navItems.push(
-      { id: 'reports' as Tab, label: '系统报表管理', icon: FilePieChart },
+      { id: 'reports' as Tab, label: '报表与安保账号', icon: FilePieChart },
       { id: 'settings' as Tab, label: '系统参数设置', icon: Settings }
     );
   }

@@ -223,7 +223,7 @@ export default function Header({ searchQuery, setSearchQuery, username }: Header
                   凭证有效性自检
                 </h4>
                 <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                  系统采用 Sa-Token JWT 进行无状态身份鉴权。管理员可在右上角「安保人员管理」界面中对人员账户进行新增、注销或密码重置。
+                  系统采用 Sa-Token JWT 进行无状态身份鉴权。管理员可在左侧「报表与安保账号」界面中对安保人员账户进行新增、注销或密码重置。
                 </p>
                 <div className="pt-2 flex gap-3">
                   <button
