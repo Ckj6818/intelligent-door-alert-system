@@ -90,18 +90,25 @@ export default function AlertWorkflowTab({
         alert('No alert logs available for export.');
         return;
       }
-      const rows = records.map((item: any) => ({
-        '告警时间': new Date(item.createTime).toLocaleString(),
-        '设备ID': item.deviceId,
-        '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
-        '危险等级': item.dangerLevel >= 3 ? 'HIGH' : item.dangerLevel === 2 ? 'MEDIUM' : 'LOW',
-        '状态': item.status === 1 ? '已处理' : '未处理'
-      }));
+      const backendOrigin = `${window.location.protocol}//${window.location.hostname}:8081`;
+      const rows = records.map((item: any) => {
+        const imgUrl = item.imageUrl 
+          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${backendOrigin}${item.imageUrl}`)
+          : '-';
+        return {
+          '告警时间': new Date(item.createTime).toLocaleString(),
+          '设备ID': item.deviceId,
+          '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
+          '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
+          '抓拍图片链接': imgUrl,
+          '处置状态': item.status === 1 ? '已处理' : '待复核'
+        };
+      });
       const worksheet = XLSX.utils.json_to_sheet(rows);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录');
-      XLSX.writeFile(workbook, '智能门禁告警报表.xlsx');
-      alert('Alert logs report compiled as Excel successfully.');
+      XLSX.writeFile(workbook, '智能门禁告警工作流日志.xlsx');
+      alert('门禁安防报警处置工作流日志已成功导出为 Excel 表格。');
     } catch (error) {
       console.error('Export failed', error);
     }

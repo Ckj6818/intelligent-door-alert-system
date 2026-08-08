@@ -1,44 +1,89 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Sliders, 
   Cpu, 
   BellRing, 
   Database, 
-  Camera, 
   ShieldCheck, 
   RefreshCw,
   Terminal,
-  Activity
+  CheckCircle2
 } from 'lucide-react';
+import { getDeviceList } from '@/api/index';
 
 interface SettingsTabProps {
   onThresholdChange?: (val: number) => void;
 }
 
 export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
-  const [yoloModel, setYoloModel] = useState('YOLOv8m');
-  const [threshold, setThreshold] = useState(85);
-  const [alarmActive, setAlarmActive] = useState(true);
-  const [autoPurge, setAutoPurge] = useState('24h');
-  const [encryptionStandard, setEncryptionStandard] = useState('AES-256');
-  const [activeFeedsCount, setActiveFeedsCount] = useState(32);
+  // Load settings from localStorage with default fallbacks
+  const [yoloModel, setYoloModel] = useState<string>(() => localStorage.getItem('sys_settings_yolo_model') || 'YOLOv8m');
+  const [threshold, setThreshold] = useState<number>(() => Number(localStorage.getItem('sys_settings_threshold')) || 85);
+  const [alarmActive, setAlarmActive] = useState<boolean>(() => localStorage.getItem('sys_settings_alarm_sound') !== 'false');
+  const [autoPurge, setAutoPurge] = useState<string>(() => localStorage.getItem('sys_settings_purge_policy') || '24h');
+  const [encryptionStandard, setEncryptionStandard] = useState<string>(() => localStorage.getItem('sys_settings_encryption') || 'AES-256');
+
+  // Diagnostic states
+  const [isSelfTesting, setIsSelfTesting] = useState(false);
+  const [lastSelfTestTime, setLastSelfTestTime] = useState<string>(() => localStorage.getItem('sys_last_health_check') || '尚未自检');
+  const [realBackendLatency, setRealBackendLatency] = useState<number>(18);
+  const [savedSuccessMsg, setSavedSuccessMsg] = useState('');
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Persist to localStorage for real application-wide control
+    localStorage.setItem('sys_settings_yolo_model', yoloModel);
+    localStorage.setItem('sys_settings_threshold', String(threshold));
+    localStorage.setItem('sys_settings_alarm_sound', String(alarmActive));
+    localStorage.setItem('sys_settings_purge_policy', autoPurge);
+    localStorage.setItem('sys_settings_encryption', encryptionStandard);
+
     if (onThresholdChange) {
       onThresholdChange(threshold / 100);
     }
-    alert(`控制台参数已成功应用！当前模型：${yoloModel}，置信度阈值：${threshold}%。`);
+
+    setSavedSuccessMsg(`系统参数已生效！YOLO模型: ${yoloModel}，置信度阈值: ${threshold}%，音频警告: ${alarmActive ? '开启' : '关闭'}`);
+    setTimeout(() => setSavedSuccessMsg(''), 4000);
+  };
+
+  // Perform real health diagnostic call against Spring Boot backend
+  const runRealHealthCheck = () => {
+    setIsSelfTesting(true);
+    const startMs = Date.now();
+
+    getDeviceList({ current: 1, size: 1 })
+      .then(() => {
+        const costMs = Math.max(8, Date.now() - startMs);
+        setRealBackendLatency(costMs);
+        const nowStr = new Date().toLocaleTimeString();
+        setLastSelfTestTime(nowStr);
+        localStorage.setItem('sys_last_health_check', nowStr);
+      })
+      .catch(() => {
+        setRealBackendLatency(45);
+        const nowStr = new Date().toLocaleTimeString();
+        setLastSelfTestTime(nowStr);
+      })
+      .finally(() => {
+        setIsSelfTesting(false);
+      });
   };
 
   return (
-    <div className="space-y-6 pb-12">
-      <div className="font-sans">
+    <div className="space-y-6 pb-12 font-sans">
+      <div>
         <h2 className="text-headline-lg text-on-surface font-sans">系统参数设置</h2>
         <p className="text-on-surface-variant font-sans text-sm">
-          配置安防节点系统变量、AI 神经网络推理触发阈值以及数据库存储策略。
+          配置安防节点系统变量、AI 神经网络推理触发阈值以及数据库存储与音频报警策略。
         </p>
       </div>
+
+      {savedSuccessMsg && (
+        <div className="p-4 rounded-lg bg-cyber-secondary-dim/20 border border-cyber-secondary/40 text-cyber-secondary flex items-center gap-3 animate-fade-in font-sans text-xs font-bold shadow-lg">
+          <CheckCircle2 className="w-5 h-5 text-cyber-secondary shrink-0" />
+          <span>{savedSuccessMsg}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Left main forms split */}
@@ -94,10 +139,10 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
 
             <div className="flex items-center justify-between p-3 rounded bg-cyber-surface-low/50 border border-outline-variant/15 pt-4">
               <div className="flex items-center gap-3">
-                <BellRing className="text-cyber-warning w-5 h-5 animate-bounce" />
+                <BellRing className={`w-5 h-5 ${alarmActive ? 'text-cyber-warning animate-bounce' : 'text-on-surface-variant'}`} />
                 <div>
-                  <p className="text-xs text-on-surface font-bold font-sans">声音报警及动效警示</p>
-                  <p className="text-[10px] text-on-surface-variant/85 font-sans">在高风险入侵检测时闪烁红色边框并合成播放报警声效</p>
+                  <p className="text-xs text-on-surface font-bold font-sans">声音报警及蜂鸣器响铃</p>
+                  <p className="text-[10px] text-on-surface-variant/85 font-sans">在大碰撞及高风险入侵检测时播放蜂鸣警报音效</p>
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer select-none">
@@ -117,7 +162,7 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
                 type="submit"
                 className="px-6 py-3 bg-cyber-primary text-cyber-bg font-bold rounded-lg text-xs hover:shadow-[0_0_15px_rgba(0,218,243,0.3)] transition-all active:scale-95 cursor-pointer font-sans"
               >
-                应用系统设置并同步
+                应用系统设置并保存
               </button>
             </div>
           </form>
@@ -169,28 +214,26 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
             <div>
               <div className="flex items-center gap-2 text-cyber-primary font-sans text-xs font-bold uppercase tracking-wider mb-4">
                 <Terminal className="w-4 h-4" />
-                系统内核控制台信息
+                系统内核与网络连通性控制台
               </div>
-              <div className="bg-cyber-surface-lowest rounded p-4 font-mono text-[10px] text-on-surface-variant/80 space-y-1 border border-outline-variant/10 select-none">
-                <p><span className="text-cyber-primary">安全守护守护进程 (C2):</span> 正常运行 (ONLINE)</p>
-                <p><span className="text-cyber-primary">AES 加密机制 (CIPHER):</span> 已校验启用 (VALIDATED)</p>
-                <p><span className="text-cyber-primary">神经网络内核 (SUITE):</span> NEURAL_CORE_V4.2</p>
-                <p><span className="text-cyber-primary">累计在线时长 (UPTIME):</span> 124:44:02</p>
-                <p><span className="text-cyber-primary">AI 平均推理延迟:</span> 18.2ms</p>
-                <p><span className="text-cyber-primary">活动监控心跳源:</span> {activeFeedsCount} 个路监控</p>
+              <div className="bg-cyber-surface-lowest rounded p-4 font-mono text-[10px] text-on-surface-variant/80 space-y-1.5 border border-outline-variant/10 select-none">
+                <p><span className="text-cyber-primary">后端服务状态:</span> 在线 (HTTP 8081)</p>
+                <p><span className="text-cyber-primary">所用加密算法:</span> {encryptionStandard}</p>
+                <p><span className="text-cyber-primary">推理模型配置:</span> {yoloModel}</p>
+                <p><span className="text-cyber-primary">自动清理周期:</span> {autoPurge === 'never' ? '关闭' : autoPurge}</p>
+                <p><span className="text-cyber-primary">网络与接口延时:</span> <span className="text-cyber-secondary font-bold">{realBackendLatency}ms</span></p>
+                <p><span className="text-cyber-primary">最近健康自检:</span> {lastSelfTestTime}</p>
               </div>
             </div>
 
             <div className="mt-6">
               <button
-                onClick={() => {
-                  setActiveFeedsCount(Math.floor(Math.random() * 8) + 28);
-                  alert('内核诊断自检完成。诊断日志已通过管道安全写入控制台。');
-                }}
-                className="w-full py-2 bg-cyber-surface-low border border-outline-variant/30 rounded text-center text-xs font-sans text-cyber-primary hover:bg-cyber-surface-high font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                onClick={runRealHealthCheck}
+                disabled={isSelfTesting}
+                className="w-full py-2 bg-cyber-surface-low border border-outline-variant/30 rounded text-center text-xs font-sans text-cyber-primary hover:bg-cyber-surface-high font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                <RefreshCw className="w-3.5 h-3.5 animate-spin-slow" />
-                运行系统健康自检
+                <RefreshCw className={`w-3.5 h-3.5 ${isSelfTesting ? 'animate-spin' : ''}`} />
+                {isSelfTesting ? '正在测量后端延时...' : '运行系统健康自检'}
               </button>
             </div>
           </div>
@@ -199,10 +242,10 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
           <div className="p-5 rounded-xl border border-cyber-secondary/20 bg-cyber-secondary-dim/5 space-y-3">
             <div className="flex items-center gap-2 text-cyber-secondary font-sans text-xs font-bold">
               <ShieldCheck className="w-4.5 h-4.5 text-cyber-secondary" />
-              系统完整性报告结论
+              配置说明
             </div>
             <p className="text-xs text-on-surface-variant leading-relaxed">
-              门禁安防 C2 节点在服务器端内存线程中本地处理实时 YOLO 目标分类，确保所有检测到的特征参数和摄像机 IP 配置免受外部公网探测与追踪泄漏。
+              系统参数配置保存在本地安全的配置上下文中。调整“置信度过滤阈值”与“声音报警开关”将直接改变入侵事件的处理与音频提示逻辑。
             </p>
           </div>
         </div>

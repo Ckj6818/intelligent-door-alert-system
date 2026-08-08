@@ -174,16 +174,19 @@ export default function App() {
             if (rawAlert.dangerLevel >= 3) {
               setShowThreatPopup(true);
               try {
-                const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-                gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-                osc.start();
-                setTimeout(() => osc.stop(), 400);
+                const alarmSoundEnabled = localStorage.getItem('sys_settings_alarm_sound') !== 'false';
+                if (alarmSoundEnabled) {
+                  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+                  const osc = audioCtx.createOscillator();
+                  const gain = audioCtx.createGain();
+                  osc.connect(gain);
+                  gain.connect(audioCtx.destination);
+                  osc.type = 'sawtooth';
+                  osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+                  gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                  osc.start();
+                  setTimeout(() => osc.stop(), 400);
+                }
               } catch (e) {
                 // Ignore audio autoplay restrictions
               }
@@ -239,18 +242,21 @@ export default function App() {
   // Triggered by "Trigger Breach Attempt" helper button on Dashboard
   const triggerThreatEvent = () => {
     setShowThreatPopup(true);
-    // Sound mock feedback
+    // Sound mock feedback (respects user setting)
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(880, audioCtx.currentTime); // High alarm frequency
-      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      osc.start();
-      setTimeout(() => osc.stop(), 400);
+      const alarmSoundEnabled = localStorage.getItem('sys_settings_alarm_sound') !== 'false';
+      if (alarmSoundEnabled) {
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime); // High alarm frequency
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        osc.start();
+        setTimeout(() => osc.stop(), 400);
+      }
     } catch (e) {
       // Audio context may be blocked by browser user gesture, ignore safely
     }
