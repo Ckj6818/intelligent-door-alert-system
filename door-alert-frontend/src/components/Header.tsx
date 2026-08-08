@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Clock, Bell, Shield, ChevronDown, ShieldCheck, Key, Activity, User } from 'lucide-react';
+import { Tab, Alert } from '../types';
 
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   username: string;
+  alerts?: Alert[];
+  setActiveTab?: (tab: Tab) => void;
 }
 
-export default function Header({ searchQuery, setSearchQuery, username }: HeaderProps) {
+export default function Header({ searchQuery, setSearchQuery, username, alerts = [], setActiveTab }: HeaderProps) {
   const [timeMode, setTimeMode] = useState<'local' | 'utc'>('local');
   const [timeString, setTimeString] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -16,6 +19,10 @@ export default function Header({ searchQuery, setSearchQuery, username }: Header
   const [showHealthModal, setShowHealthModal] = useState(false);
 
   const userRole = localStorage.getItem('user_role') || 'OPERATOR';
+
+  // Compute pending/unhandled alerts
+  const pendingAlerts = alerts.filter(a => a.status === '待复核');
+  const unreadCount = pendingAlerts.length;
 
   // Tick clock
   useEffect(() => {
@@ -82,17 +89,29 @@ export default function Header({ searchQuery, setSearchQuery, username }: Header
           <div className="relative">
             <button 
               onClick={() => setNotificationsOpen(!notificationsOpen)}
-              className="material-symbols-outlined text-on-surface-variant hover:text-cyber-primary transition-all cursor-pointer select-none p-1.5 hover:bg-cyber-surface-low/40 rounded-full relative"
+              className="material-symbols-outlined text-on-surface-variant hover:text-cyber-primary transition-all cursor-pointer select-none p-1.5 hover:bg-cyber-surface-low/40 rounded-full relative flex items-center justify-center"
+              title="未处理警报通知"
             >
-              <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-cyber-error rounded-full" />
+              <Bell className="w-5 h-5" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-cyber-error text-white font-mono font-bold text-[10px] min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center border-2 border-cyber-bg shadow-[0_0_8px_rgba(255,59,48,0.6)] animate-pulse">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
             </button>
 
             {/* Notifications Dropdown */}
             {notificationsOpen && (
-              <div className="absolute right-0 mt-3 w-80 glass-panel rounded-lg shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                <div className="flex justify-between items-center pb-2 border-b border-outline-variant/10 mb-2">
-                  <span className="text-label-caps text-xs text-cyber-primary font-sans font-bold">系统警报信号</span>
+              <div className="absolute right-0 mt-3 w-84 glass-panel rounded-xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-200 border border-outline-variant/20">
+                <div className="flex justify-between items-center pb-2 border-b border-outline-variant/10 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-label-caps text-xs text-cyber-primary font-sans font-bold">系统警报信号</span>
+                    {unreadCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-cyber-error-dim/20 text-cyber-error font-mono font-bold">
+                        {unreadCount} 条待复核
+                      </span>
+                    )}
+                  </div>
                   <button 
                     onClick={() => setNotificationsOpen(false)}
                     className="text-xs text-on-surface-variant hover:text-on-surface font-sans cursor-pointer"
@@ -100,18 +119,54 @@ export default function Header({ searchQuery, setSearchQuery, username }: Header
                     关闭
                   </button>
                 </div>
-                <div className="space-y-3">
-                  <div className="p-2 rounded bg-cyber-error-dim/10 border-l-2 border-cyber-error">
-                    <p className="text-xs text-on-surface font-bold font-sans">触发紧急入侵警告</p>
-                    <p className="text-[10px] text-on-surface-variant/80 font-sans">检测到北防区 12 号段有疑似越界入侵尝试</p>
-                    <span className="text-[9px] text-cyber-error font-mono font-bold">1 分钟前</span>
-                  </div>
-                  <div className="p-2 rounded bg-cyber-primary-dim/10 border-l-2 border-cyber-primary">
-                    <p className="text-xs text-on-surface font-sans">自动清理垃圾箱</p>
-                    <p className="text-[10px] text-on-surface-variant/80 font-sans">14 条数据库逻辑日志已移至回收站</p>
-                    <span className="text-[9px] text-cyber-primary font-mono">2 小时前</span>
-                  </div>
+                
+                <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                  {pendingAlerts.length > 0 ? (
+                    pendingAlerts.slice(0, 5).map((item) => (
+                      <div 
+                        key={item.id} 
+                        onClick={() => {
+                          setNotificationsOpen(false);
+                          if (setActiveTab) setActiveTab('workflow');
+                        }}
+                        className="p-2.5 rounded bg-cyber-surface-low/50 hover:bg-cyber-surface-high/60 border-l-3 border-cyber-error transition-all cursor-pointer group"
+                      >
+                        <div className="flex justify-between items-center mb-1">
+                          <p className="text-xs text-on-surface font-bold font-sans group-hover:text-cyber-primary transition-colors">
+                            {item.type}
+                          </p>
+                          <span className="text-[9px] text-cyber-error font-mono font-bold bg-cyber-error-dim/20 px-1.5 py-0.5 rounded">
+                            待复核
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-on-surface-variant/80 font-sans truncate">
+                          {item.device} · {item.location}
+                        </p>
+                        <span className="text-[9px] text-on-surface-variant/60 font-mono mt-1 block">
+                          {item.time} ({item.date})
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-6 text-center text-xs text-on-surface-variant font-sans">
+                      暂无待复核警报信号
+                    </div>
+                  )}
                 </div>
+
+                {setActiveTab && (
+                  <div className="pt-3 border-t border-outline-variant/10 mt-3 text-center">
+                    <button
+                      onClick={() => {
+                        setNotificationsOpen(false);
+                        setActiveTab('workflow');
+                      }}
+                      className="text-xs font-sans text-cyber-primary hover:underline cursor-pointer font-bold"
+                    >
+                      查看全部告警处置流程 →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

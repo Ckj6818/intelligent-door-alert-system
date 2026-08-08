@@ -371,6 +371,8 @@ export default function App() {
         searchQuery={searchQuery} 
         setSearchQuery={setSearchQuery} 
         username={username} 
+        alerts={alerts}
+        setActiveTab={setActiveTab}
       />
 
       {/* Main Content viewport scrollable area */}
