@@ -1,5 +1,7 @@
-import cv2
 import os
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+
+import cv2
 import time
 import uuid
 import threading
@@ -211,65 +213,30 @@ class FrameSource:
             success = False
             import platform
             is_windows = platform.system() == "Windows"
-            indices_to_try = [self.source] + [i for i in range(5) if i != self.source]
+            backend_api = cv2.CAP_DSHOW if is_windows else cv2.CAP_ANY
 
-            for idx in indices_to_try:
-                print(f"[INFO] 正在尝试打开摄像头索引: {idx}")
-                if is_windows:
-                    cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-                    if cap.isOpened():
-                        ret, frame = False, None
-                        for _ in range(10):
-                            ret, frame = cap.read()
-                            if ret and frame is not None:
-                                break
-                            time.sleep(0.1)
-                        if ret and frame is not None:
-                            self.cap = cap
-                            self.source = idx
-                            self.api_preference = "DSHOW"
-                            success = True
-                            print(f"[INFO] 成功通过 DSHOW 打开并读取摄像头索引: {idx}")
-                            break
+            print(f"[INFO] 正在尝试打开摄像头索引: {self.source}")
+            try:
+                cap = cv2.VideoCapture(self.source, backend_api)
+                if cap.isOpened():
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    time.sleep(0.1)
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        self.cap = cap
+                        self.api_preference = "DSHOW" if is_windows else "DEFAULT"
+                        success = True
+                        print(f"[INFO] 成功打开并读取摄像头索引: {self.source}")
+                    else:
                         cap.release()
-
-                    cap = cv2.VideoCapture(idx)
-                    if cap.isOpened():
-                        ret, frame = False, None
-                        for _ in range(10):
-                            ret, frame = cap.read()
-                            if ret and frame is not None:
-                                break
-                            time.sleep(0.1)
-                        if ret and frame is not None:
-                            self.cap = cap
-                            self.source = idx
-                            self.api_preference = "DEFAULT"
-                            success = True
-                            print(f"[INFO] 成功通过默认 API 打开并读取摄像头索引: {idx}")
-                            break
-                        cap.release()
-                else:
-                    cap = cv2.VideoCapture(idx)
-                    if cap.isOpened():
-                        ret, frame = False, None
-                        for _ in range(10):
-                            ret, frame = cap.read()
-                            if ret and frame is not None:
-                                break
-                            time.sleep(0.1)
-                        if ret and frame is not None:
-                            self.cap = cap
-                            self.source = idx
-                            self.api_preference = "DEFAULT"
-                            success = True
-                            print(f"[INFO] 成功打开并读取摄像头索引: {idx}")
-                            break
-                        cap.release()
+            except Exception:
+                pass
 
             if not success:
                 if os.path.exists("demo/demo.jpg"):
-                    print("[WARN] 无法打开任何摄像头，已自动降级至 demo/demo.jpg 进行图片演示模式运行")
+                    print("[INFO] 未检测到可用摄像头或权限受限，已自动切换至 demo/demo.jpg 演示模式运行")
                     self.mode = "image"
                     self.source = "demo/demo.jpg"
                     self.static_frame = cv2.imread(self.source)
@@ -291,8 +258,9 @@ class FrameSource:
                 raise RuntimeError(f"无法打开视频源: {self.source}。{hint}")
 
     def read(self):
+        """返回 (ret, frame, is_fallback)。is_fallback=True 表示当前帧为降级展示帧，不应触发告警。"""
         if self.mode == "image":
-            return True, self.static_frame.copy()
+            return True, self.static_frame.copy(), False
 
         ret, frame = self.cap.read()
         if not ret or frame is None:
@@ -300,30 +268,32 @@ class FrameSource:
                 print("[WARN] 摄像头读取帧失败，正在尝试重新连接摄像头...")
                 self.cap.release()
                 time.sleep(0.5)
-                if self.api_preference == "DSHOW":
-                    self.cap = cv2.VideoCapture(self.source, cv2.CAP_DSHOW)
-                else:
-                    self.cap = cv2.VideoCapture(self.source)
+                import platform
+                backend_api = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
+                self.cap = cv2.VideoCapture(self.source, backend_api)
 
                 if self.cap.isOpened():
+                    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     for _ in range(5):
                         ret, frame = self.cap.read()
                         if ret and frame is not None:
                             print("[INFO] 摄像头重新连接并读取成功！")
-                            return True, frame
+                            return True, frame, False
                         time.sleep(0.1)
 
-                print("[ERROR] 摄像头重连失败，临时展示演示图。")
+                print("[WARN] 摄像头重连失败，临时展示演示图（不触发告警）。")
                 if os.path.exists("demo/demo.jpg"):
                     demo_img = cv2.imread("demo/demo.jpg")
                     if demo_img is not None:
-                        return True, demo_img
-                return False, None
+                        return True, demo_img, True  # 降级帧，禁止告警
+                return False, None, True
 
             if self.mode == "file" and VIDEO_LOOP:
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
-        return ret, frame
+        return ret, frame, False
 
     def release(self):
         if self.cap is not None:
@@ -418,7 +388,7 @@ def main():
 
     if is_image_mode:
         # 图片模式：同步跑一次 YOLO 推理，缓存结果，不启动推理线程
-        ret, frame = frame_source.read()
+        ret, frame, _ = frame_source.read()
         if not ret:
             print("[ERROR] 无法读取演示图片！")
             frame_source.release()
@@ -527,10 +497,27 @@ def main():
     threading.Thread(target=yolo_inference_thread, daemon=True).start()
 
     while True:
-        ret, frame = frame_source.read()
+        ret, frame, is_fallback = frame_source.read()
         if not ret:
             print("[ERROR] 无法读取视频帧！")
             break
+
+        # 降级帧（摄像头故障回退到 demo 图）：仅展示，不送入推理和告警流程
+        if is_fallback:
+            cv2.putText(
+                frame, "[CAMERA OFFLINE] Display only",
+                (10, frame.shape[0] - 20),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 200), 2,
+            )
+            if not HEADLESS:
+                cv2.imshow("Intelligent Door Alert System - Edge Node", frame)
+                if cv2.waitKey(200) & 0xFF == ord("q"):
+                    print("[INFO] 接收到退出指令，系统关闭...")
+                    running = False
+                    break
+            else:
+                time.sleep(0.5)
+            continue
 
         frame_clean = frame.copy()
 

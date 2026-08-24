@@ -5,6 +5,8 @@ cd /d "%~dp0\..\door-alert-backend"
 echo [Backend] cwd: %CD%
 echo.
 
+if exist "%LOCALAPPDATA%\apache-maven\apache-maven-3.9.9\bin\mvn.cmd" set "PATH=%LOCALAPPDATA%\apache-maven\apache-maven-3.9.9\bin;%PATH%"
+
 where mvn >nul 2>&1
 if %errorlevel%==0 (
     echo [Backend] mvn spring-boot:run
@@ -13,7 +15,7 @@ if %errorlevel%==0 (
 )
 
 set "MVN="
-for /f "delims=" %%M in ('dir /s /b "%USERPROFILE%\.m2\wrapper\dists\apache-maven-*\bin\mvn.cmd" 2^>nul') do (
+for /f "delims=" %%M in ('where /r %USERPROFILE%\.m2 mvn.cmd 2^>nul') do (
     if not defined MVN set "MVN=%%M"
 )
 

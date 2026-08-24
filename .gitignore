@@ -35,8 +35,25 @@ Thumbs.db
 
 # AI Models & Temp
 *.pt
-temp_capture_*.jpg
+temp_capture_*
+door-alert-ai/temp_capture_*
+
+# Image & Media Files (protect personal photos and privacy)
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
+*.mp4
+*.avi
+!door-alert-frontend/public/favicon.svg
+door-alert-ai/demo/*.jpg
+door-alert-ai/demo/*.jpeg
+door-alert-ai/demo/*.png
+door-alert-ai/demo/*.mp4
 
 # Backend Uploads & Alert Images (never commit)
 uploads/
+uploads/*
 door-alert-backend/uploads/
+door-alert-backend/uploads/*
