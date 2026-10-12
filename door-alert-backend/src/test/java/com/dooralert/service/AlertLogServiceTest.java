@@ -6,7 +6,9 @@ import com.dooralert.entity.AlertLog;
 import com.dooralert.entity.SysDevice;
 import com.dooralert.mapper.AlertLogMapper;
 import com.dooralert.mapper.SysDeviceMapper;
+import com.dooralert.mapper.PassageLogMapper;
 import com.dooralert.vo.AlertLogVO;
+import com.dooralert.vo.AlertWsPayload;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,6 +33,9 @@ class AlertLogServiceTest {
     private AlertLogMapper alertLogMapper;
 
     @Autowired
+    private PassageLogMapper passageLogMapper;
+
+    @Autowired
     private SysDeviceMapper sysDeviceMapper;
 
     private Long testDeviceId;
@@ -39,6 +44,7 @@ class AlertLogServiceTest {
     void setUp() {
         // 清空数据
         alertLogMapper.delete(null);
+        passageLogMapper.delete(null);
         sysDeviceMapper.delete(null);
 
         // 插入测试设备
@@ -52,24 +58,49 @@ class AlertLogServiceTest {
 
     @Test
     @Order(1)
-    @DisplayName("告警上报 — 无图片文件也应成功入库")
+    @DisplayName("未授权告警上报 — 无图片文件也应成功入库为待处理工单")
     void uploadAlert_withoutFile_shouldSave() {
         AlertUploadDTO dto = new AlertUploadDTO();
         dto.setDeviceId(testDeviceId);
         dto.setProximityRatio(0.55);
         dto.setDangerLevel(3);
+        dto.setAuthStatus("UNAUTHORIZED");
+        dto.setRecognizedName("未授权人员/陌生人");
 
-        AlertLogVO result = alertLogService.uploadAlert(dto, null);
+        AlertWsPayload result = alertLogService.uploadAlert(dto, null);
 
         assertNotNull(result, "上报结果不应为空");
-        assertNotNull(result.getId(), "记录 ID 不应为空");
+        assertNotNull(result.getAlertId(), "记录 ID 不应为空");
         assertEquals(testDeviceId, result.getDeviceId());
-        assertEquals(3, result.getDangerLevel());
+        assertEquals(3, result.getAlertLevel());
         assertEquals(0, result.getStatus(), "新上报的告警应为未处理状态");
+        assertEquals("UNAUTHORIZED", result.getAuthStatus());
+        assertEquals("ALERT", result.getEventType());
     }
 
     @Test
     @Order(2)
+    @DisplayName("授权通行上报 — 写入通行日志而非告警工单")
+    void uploadAlert_authorized_shouldSavePassage() {
+        AlertUploadDTO dto = new AlertUploadDTO();
+        dto.setDeviceId(testDeviceId);
+        dto.setProximityRatio(0.40);
+        dto.setDangerLevel(0);
+        dto.setAuthStatus("AUTHORIZED");
+        dto.setRecognizedName("陈柯杰");
+
+        AlertWsPayload result = alertLogService.uploadAlert(dto, null);
+
+        assertNotNull(result);
+        assertEquals("AUTHORIZED", result.getAuthStatus());
+        assertEquals("PASSAGE", result.getEventType());
+        assertEquals("陈柯杰", result.getRecognizedName());
+        assertEquals(0, alertLogMapper.selectCount(null));
+        assertEquals(1, passageLogMapper.selectCount(null));
+    }
+
+    @Test
+    @Order(3)
     @DisplayName("处理告警 — 状态应从 0 变为 1")
     void handleAlert_shouldChangeStatus() {
         // 先创建一条告警
@@ -89,7 +120,7 @@ class AlertLogServiceTest {
     }
 
     @Test
-    @Order(3)
+    @Order(4)
     @DisplayName("逻辑删除 — 删除后应从活跃列表消失，出现在回收站")
     void logicalDelete_shouldMoveToRecycleBin() {
         // 创建告警
@@ -118,7 +149,7 @@ class AlertLogServiceTest {
     }
 
     @Test
-    @Order(4)
+    @Order(5)
     @DisplayName("恢复告警 — 从回收站恢复后应重新出现在活跃列表")
     void restoreAlert_shouldReappearInActiveList() {
         // 创建并逻辑删除
@@ -141,7 +172,7 @@ class AlertLogServiceTest {
     }
 
     @Test
-    @Order(5)
+    @Order(6)
     @DisplayName("分页查询 — 应正确返回分页数据")
     void pageAlerts_shouldReturnPaginatedData() {
         // 插入 3 条告警
@@ -163,7 +194,7 @@ class AlertLogServiceTest {
     }
 
     @Test
-    @Order(6)
+    @Order(7)
     @DisplayName("永久清空回收站 — 物理删除所有已逻辑删除的记录")
     void permanentClearRecycleBin_shouldPhysicallyDelete() {
         // 创建 2 条并逻辑删除

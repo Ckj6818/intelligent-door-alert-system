@@ -9,9 +9,11 @@ import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.service.AlertLogService;
 import com.dooralert.vo.AlertLogVO;
+import com.dooralert.vo.AlertWsPayload;
 import com.dooralert.ws.AlertWebSocketServer;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -136,31 +138,59 @@ public class AlertLogController {
     // ==========================================================
 
     /**
-     * 边缘端告警上报
+     * 边缘端人脸比对结果上报（免登录）
      * <p>
-     * Python 端通过 POST 请求将检测到的告警信息推送至此接口。
-     * 系统自动将处理状态设为 0（未处理）并持久化。
+     * 解析 auth_status / recognized_name（兼容 camelCase）。
+     * UNAUTHORIZED → 保存待处理告警工单并 WebSocket 广播；
+     * AUTHORIZED → 记录通行日志并广播 PASSAGE 事件。
      * </p>
      */
     @PostMapping("/upload")
-    public Result<AlertLogVO> upload(
+    public Result<AlertWsPayload> upload(
             @RequestParam("deviceId") Long deviceId,
-            @RequestParam("proximityRatio") Double proximityRatio,
-            @RequestParam("dangerLevel") Integer dangerLevel,
+            @RequestParam(value = "proximityRatio", required = false) Double proximityRatio,
+            @RequestParam(value = "area_ratio", required = false) Double areaRatio,
+            @RequestParam(value = "dangerLevel", required = false) Integer dangerLevel,
+            @RequestParam(value = "auth_status", required = false) String authStatusSnake,
+            @RequestParam(value = "authStatus", required = false) String authStatusCamel,
+            @RequestParam(value = "recognized_name", required = false) String recognizedNameSnake,
+            @RequestParam(value = "recognizedName", required = false) String recognizedNameCamel,
+            @RequestParam(value = "snapshot_base64", required = false) String snapshotBase64,
             @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
         try {
             AlertUploadDTO dto = new AlertUploadDTO();
             dto.setDeviceId(deviceId);
-            dto.setProximityRatio(proximityRatio);
-            dto.setDangerLevel(dangerLevel);
+            dto.setProximityRatio(proximityRatio != null ? proximityRatio : areaRatio);
+            if (dto.getProximityRatio() == null) {
+                return Result.error("接近度 proximityRatio / area_ratio 不能为空");
+            }
+            dto.setDangerLevel(dangerLevel != null ? dangerLevel : 2);
+            dto.setAuthStatus(firstNonBlank(authStatusSnake, authStatusCamel));
+            dto.setRecognizedName(firstNonBlank(recognizedNameSnake, recognizedNameCamel));
+            dto.setSnapshotBase64(snapshotBase64);
 
-            AlertLogVO vo = alertLogService.uploadAlert(dto, file);
+            AlertWsPayload payload = alertLogService.uploadAlert(dto, file);
             SysDeviceController.touchHeartbeat(deviceId);
-            AlertWebSocketServer.sendAlertNotification(vo);
-            return Result.success("告警上报成功", vo);
+            AlertWebSocketServer.sendAlertNotification(payload);
+
+            String msg = "PASSAGE".equals(payload.getEventType())
+                    ? "授权通行已记录"
+                    : "未授权告警上报成功（待处理工单）";
+            return Result.success(msg, payload);
         } catch (Exception e) {
             e.printStackTrace();
-            return Result.error("Error: " + e.getMessage() + " | Cause: " + (e.getCause() != null ? e.getCause().getMessage() : ""));
+            return Result.error("Error: " + e.getMessage() + " | Cause: "
+                    + (e.getCause() != null ? e.getCause().getMessage() : ""));
         }
+    }
+
+    private static String firstNonBlank(String a, String b) {
+        if (StringUtils.hasText(a)) {
+            return a.trim();
+        }
+        if (StringUtils.hasText(b)) {
+            return b.trim();
+        }
+        return null;
     }
 }

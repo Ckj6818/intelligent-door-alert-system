@@ -178,3 +178,67 @@ export function resetOperatorPassword(id: string | number): Promise<any> {
     method: 'post',
   });
 }
+
+/**
+ * 获取授权人员白名单
+ * @param includeDisabled 是否包含禁用人员
+ */
+export function getAuthorizedUsers(includeDisabled = false): Promise<any> {
+  return request({
+    url: '/authorized-users',
+    method: 'get',
+    params: { includeDisabled },
+  });
+}
+
+/**
+ * 新增授权人员（JSON，无照片）
+ */
+export function addAuthorizedUser(data: {
+  userCode: string;
+  name: string;
+  department?: string;
+  avatarUrl?: string;
+  status?: number;
+}): Promise<any> {
+  return request({
+    url: '/authorized-users',
+    method: 'post',
+    data,
+  });
+}
+
+/**
+ * 管理员新增授权人员并上传正脸照片（同步至 AI 人脸库）
+ */
+export function addAuthorizedUserWithAvatar(form: FormData): Promise<any> {
+  return request({
+    url: '/authorized-users/with-avatar',
+    method: 'post',
+    data: form,
+    // 不要手动设 Content-Type，由 axios 自动带 multipart boundary
+    timeout: 30000,
+  });
+}
+
+/**
+ * 启用/禁用授权人员（同步边缘人脸库）
+ */
+export function updateAuthorizedUserStatus(id: number, status: 0 | 1): Promise<any> {
+  return request({
+    url: `/authorized-users/${id}/status`,
+    method: 'put',
+    params: { status },
+  });
+}
+
+/**
+ * 删除授权人员（同步移除边缘人脸）
+ */
+export function deleteAuthorizedUser(id: number): Promise<any> {
+  return request({
+    url: `/authorized-users/${id}`,
+    method: 'delete',
+  });
+}
+

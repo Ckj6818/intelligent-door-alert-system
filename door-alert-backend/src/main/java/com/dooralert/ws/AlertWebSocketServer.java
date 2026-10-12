@@ -59,9 +59,13 @@ public class AlertWebSocketServer {
     }
 
     /**
-     * 异步广播告警数据给所有在线大屏客户端
+     * 异步广播告警 / 通行事件给所有在线大屏客户端。
+     * <p>
+     * 推荐载荷 {@link com.dooralert.vo.AlertWsPayload}，字段包括：
+     * alertId, authStatus, recognizedName, areaRatio, alertLevel, imageUrl, timestamp。
+     * </p>
      *
-     * @param alertData 告警 VO 实体
+     * @param alertData 告警/通行广播载荷
      */
     public static void sendAlertNotification(Object alertData) {
         BROADCAST_EXECUTOR.execute(() -> {
@@ -83,7 +87,8 @@ public class AlertWebSocketServer {
                     }
                 }
 
-                log.info("告警 WebSocket 广播完成，推送客户端数={}", successCount);
+                log.info("WebSocket 广播完成，推送客户端数={}，payload={}",
+                        successCount, message.length() > 200 ? message.substring(0, 200) + "..." : message);
             } catch (Exception e) {
                 log.error("告警 WebSocket 广播失败", e);
             }

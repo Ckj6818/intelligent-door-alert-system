@@ -20,7 +20,13 @@ public class AlertLogVO {
 
     private Integer dangerLevel;
 
-    /** 0-未处理, 1-已处理 */
+    /** AUTHORIZED / UNAUTHORIZED */
+    private String authStatus;
+
+    /** 识别到的姓名 */
+    private String recognizedName;
+
+    /** 0-未处理(待处理工单), 1-已处理 */
     private Integer status;
 
     private LocalDateTime createTime;

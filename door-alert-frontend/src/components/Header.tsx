@@ -1,16 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Clock, Bell, Shield, ChevronDown, ShieldCheck, Key, Activity, User } from 'lucide-react';
+import { Search, Clock, Bell, ChevronDown, ShieldCheck, Key, Activity, Users } from 'lucide-react';
 import { Tab, Alert } from '../types';
-
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   username: string;
   alerts?: Alert[];
   setActiveTab?: (tab: Tab) => void;
+  onOpenWhitelist?: () => void;
 }
 
-export default function Header({ searchQuery, setSearchQuery, username, alerts = [], setActiveTab }: HeaderProps) {
+export default function Header({
+  searchQuery,
+  setSearchQuery,
+  username,
+  alerts = [],
+  setActiveTab,
+  onOpenWhitelist,
+}: HeaderProps) {
   const [timeMode, setTimeMode] = useState<'local' | 'utc'>('local');
   const [timeString, setTimeString] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -82,6 +89,19 @@ export default function Header({ searchQuery, setSearchQuery, username, alerts =
           <Clock className="w-3.5 h-3.5" />
           <span className="tracking-wider tabular-nums">{timeString}</span>
         </button>
+
+        {/* 授权人员白名单入口 */}
+        {onOpenWhitelist && (
+          <button
+            type="button"
+            onClick={onOpenWhitelist}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-cyber-secondary/35 bg-cyber-secondary/10 text-cyber-secondary hover:bg-cyber-secondary/20 hover:shadow-[0_0_12px_rgba(0,230,57,0.25)] transition-all text-[11px] font-bold tracking-wide cursor-pointer"
+            title="查看授权人员白名单"
+          >
+            <Users className="w-3.5 h-3.5" />
+            授权人员白名单
+          </button>
+        )}
 
         {/* Alerts and Action controls */}
         <div className="flex items-center gap-4 text-on-surface-variant relative">

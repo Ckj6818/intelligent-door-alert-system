@@ -29,7 +29,15 @@ public class AlertLog {
     @TableField("danger_level")
     private Integer dangerLevel;
 
-    /** 处理状态: 0-未处理, 1-已处理 */
+    /** 授权状态: AUTHORIZED / UNAUTHORIZED */
+    @TableField("auth_status")
+    private String authStatus;
+
+    /** 识别到的姓名（授权姓名或「未授权人员/陌生人」） */
+    @TableField("recognized_name")
+    private String recognizedName;
+
+    /** 处理状态: 0-未处理(待处理工单), 1-已处理 */
     @TableField("status")
     private Integer status;
 

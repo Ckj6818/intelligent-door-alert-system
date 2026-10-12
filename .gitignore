@@ -35,8 +35,12 @@ Thumbs.db
 
 # AI Models & Temp
 *.pt
+*.onnx
 temp_capture_*
 door-alert-ai/temp_capture_*
+door-alert-ai/wheels/
+door-alert-ai/authorized_faces/.reload
+_defense_extract/
 
 # Image & Media Files (protect personal photos and privacy)
 *.jpg

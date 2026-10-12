@@ -16,6 +16,12 @@ public class AlertLogDTO {
 
     private Integer dangerLevel;
 
+    /** AUTHORIZED / UNAUTHORIZED */
+    private String authStatus;
+
+    /** 识别到的姓名 */
+    private String recognizedName;
+
     /** 0-未处理, 1-已处理 */
     private Integer status;
 }

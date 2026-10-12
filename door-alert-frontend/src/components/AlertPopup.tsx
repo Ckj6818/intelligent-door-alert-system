@@ -1,67 +1,122 @@
 import React from 'react';
-import { AlertTriangle, Shield, Check, X } from 'lucide-react';
+import { AlertTriangle, Shield, CheckCircle2, X, Camera, Percent } from 'lucide-react';
+import type { Alert } from '../types';
 
 interface AlertPopupProps {
+  alert?: Alert | null;
   onClose: () => void;
+  /** 派单处置 */
   onDispatch: () => void;
+  /** 确认误报 */
   onIgnore: () => void;
 }
 
-export default function AlertPopup({ onClose, onDispatch, onIgnore }: AlertPopupProps) {
+/**
+ * 未授权入侵强提醒（大屏中心红框）
+ */
+export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: AlertPopupProps) {
+  const name = alert?.recognizedName || '未授权人员/陌生人';
+  const areaPct = Math.round(((alert?.areaRatio ?? alert?.confidence) || 0) * 1000) / 10;
+  const imageSrc = alert?.imageSrc || '';
+
   return (
-    <div className="fixed bottom-8 right-8 w-80 glass-panel border-cyber-error/65 rounded-lg p-1 glow-error z-[100] transform transition-all duration-500 animate-in slide-in-from-bottom-5">
-      {/* Alert Header bar */}
-      <div className="bg-cyber-error/15 p-3 flex justify-between items-center rounded-t border-b border-cyber-error/25">
-        <div className="flex items-center text-cyber-error font-sans text-xs font-bold animate-pulse gap-1.5">
-          <AlertTriangle className="w-4 h-4 text-cyber-error" />
-          检测到高风险入侵
-        </div>
-        <button 
-          onClick={onClose} 
-          className="text-on-surface-variant hover:text-on-surface hover:bg-cyber-surface-low rounded p-1 transition-all cursor-pointer"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+    <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+      {/* 扫描线氛围 */}
+      <div className="absolute inset-0 pointer-events-none opacity-20 scan-line" />
 
-      {/* Alert Content body */}
-      <div className="p-3 space-y-3">
-        {/* Thermal image container */}
-        <div className="h-40 bg-cyber-surface-lowest rounded overflow-hidden relative border border-cyber-error/30">
-          <img 
-            className="w-full h-full object-cover grayscale brightness-125" 
-            alt="Thermal fence breach" 
-            src="https://lh3.googleusercontent.com/aida-public/AB6AXuBWoWqbKOIeTYFF7V3ILetfIWcFmTqN1CE-Ki1rsjmW3zXZlwZiamXU3BzsqpTYjJvG1Ax8_YEgjOTbAhMqc0b0qNZJ__h8ObQ6jHEbdtaXEhV3zPXNxZXdyhv3qjzLMksaxoujFjmGRrs9CLbiZtbSfHtFjHVryMPyvfUXtCxNo4NZRjiUNcpAIMu35jaAm_d9tnLocqKUUJYLKgUNbl44AbVDdhgCRfVLoSiFbpHTU0HJtDeTeewp"
-          />
-          <div className="absolute inset-0 border-2 border-cyber-error/30 pointer-events-none" />
-          <div className="absolute top-2 left-2 bg-cyber-error text-white px-2 py-0.5 rounded text-[9px] font-sans font-bold uppercase tracking-wider">
-            越界闯入尝试
+      <div className="relative w-full max-w-xl glass-panel border-2 border-cyber-error/70 rounded-xl overflow-hidden shadow-[0_0_60px_rgba(255,85,85,0.35)] animate-in zoom-in-95 duration-300">
+        {/* 顶栏 */}
+        <div className="bg-cyber-error/20 px-5 py-3.5 flex items-center justify-between border-b border-cyber-error/40">
+          <div className="flex items-center gap-2 text-cyber-error font-bold text-sm tracking-wide animate-pulse">
+            <span aria-hidden>🔴</span>
+            <AlertTriangle className="w-5 h-5" />
+            <span>警告：非授权人员/陌生人靠近门禁防区！</span>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-on-surface-variant hover:text-on-surface p-1.5 rounded hover:bg-cyber-surface-low cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* Text information */}
-        <div className="font-sans">
-          <p className="text-data-sm text-on-surface font-bold font-sans">未知可疑人员</p>
-          <p className="text-xs text-on-surface-variant/80 font-sans mb-3">
-            防区位置：北侧栅栏 / 12号防区
-          </p>
+        <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* 抓拍 */}
+          <div className="relative h-52 md:h-full min-h-[200px] rounded-lg overflow-hidden border border-cyber-error/40 bg-cyber-surface-lowest">
+            {imageSrc ? (
+              <img
+                src={imageSrc}
+                alt="入侵抓拍"
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-on-surface-variant gap-2">
+                <Camera className="w-8 h-8 opacity-50" />
+                <span className="text-xs">暂无抓拍图像</span>
+              </div>
+            )}
+            <div className="absolute inset-0 border-2 border-cyber-error/25 pointer-events-none" />
+            <div className="absolute top-2 left-2 bg-cyber-error text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wider">
+              UNAUTHORIZED
+            </div>
+          </div>
 
-          {/* Action buttons */}
-          <div className="grid grid-cols-2 gap-2">
-            <button 
-              onClick={onDispatch}
-              className="py-2 bg-cyber-error text-white rounded font-sans text-[11px] font-bold hover:brightness-110 active:scale-95 transition-all glow-error flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              派遣安保
-            </button>
-            <button 
-              onClick={onIgnore}
-              className="py-2 bg-cyber-surface-high text-on-surface rounded font-sans text-[11px] hover:bg-cyber-surface-highest active:scale-95 transition-all border border-outline-variant/30 flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Check className="w-3.5 h-3.5 text-on-surface-variant" />
-              忽略警报
-            </button>
+          {/* 信息与处置 */}
+          <div className="flex flex-col justify-between gap-4">
+            <div className="space-y-3">
+              <div>
+                <p className="text-[10px] text-on-surface-variant uppercase tracking-widest font-bold mb-1">
+                  识别结果
+                </p>
+                <p className="text-lg text-on-surface font-bold">{name}</p>
+                <p className="text-xs text-cyber-error/90 mt-1 font-mono">authStatus = UNAUTHORIZED</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-cyber-surface-lowest border border-outline-variant/20 p-3">
+                  <div className="flex items-center gap-1 text-[10px] text-on-surface-variant mb-1">
+                    <Percent className="w-3 h-3" />
+                    面积占比 R
+                  </div>
+                  <p className="text-xl font-mono font-bold text-cyber-error tabular-nums">
+                    {areaPct.toFixed(1)}%
+                  </p>
+                </div>
+                <div className="rounded-lg bg-cyber-surface-lowest border border-outline-variant/20 p-3">
+                  <p className="text-[10px] text-on-surface-variant mb-1">防区 / 设备</p>
+                  <p className="text-xs text-on-surface font-bold leading-snug">
+                    {alert?.location || '门禁核心防区'}
+                  </p>
+                  <p className="text-[10px] text-on-surface-variant mt-1 truncate">
+                    {alert?.device || '边缘视觉节点'}
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                边缘节点已完成人脸比对，目标未命中授权白名单。请立即确认是否为误报，或派单安保处置。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={onIgnore}
+                className="py-2.5 rounded bg-cyber-surface-high border border-outline-variant/40 text-on-surface text-xs font-bold hover:bg-cyber-surface-highest active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-cyber-secondary" />
+                确认误报
+              </button>
+              <button
+                type="button"
+                onClick={onDispatch}
+                className="py-2.5 rounded bg-cyber-error text-white text-xs font-bold hover:brightness-110 active:scale-95 transition-all glow-error flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Shield className="w-3.5 h-3.5" />
+                派单处置
+              </button>
+            </div>
           </div>
         </div>
       </div>

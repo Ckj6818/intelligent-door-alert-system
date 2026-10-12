@@ -6,6 +6,7 @@ import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.entity.AlertLog;
 import com.dooralert.vo.AlertLogVO;
+import com.dooralert.vo.AlertWsPayload;
 
 import java.util.List;
 
@@ -25,9 +26,9 @@ public interface AlertLogService extends IService<AlertLog> {
     boolean handleAlert(Long id);
 
     /**
-     * 边缘端上报告警（供 Python 视觉脚本调用）
+     * 边缘端上报：UNAUTHORIZED → 待处理告警工单；AUTHORIZED → 通行日志
      */
-    AlertLogVO uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);
+    AlertWsPayload uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);
 
     /**
      * 导出全部告警记录（需 alert:export 权限）

@@ -1,20 +1,12 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# DoorAlert 管理端前端
 
-# Run and deploy your AI Studio app
+React + Vite + TypeScript 控制台（告警、通行、授权人员、设备状态）。
 
-This contains everything you need to run your app locally.
+## 本地运行
 
-View your app in AI Studio: https://ai.studio/apps/1ddbc05f-5515-4379-8da4-91c9ebe36526
+```bash
+npm install
+npm run dev
+```
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+默认开发地址见终端输出；后端 API 默认 `http://localhost:8081`。

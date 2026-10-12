@@ -57,7 +57,7 @@ public class SysDeviceController {
     }
 
     /**
-     * 边缘端心跳上报（免登录，与告警 upload 同级）
+     * 边缘端心跳上报（免登录，与告警 upload 同级）。
      */
     @PostMapping("/{id}/heartbeat")
     public Result<Boolean> heartbeat(@PathVariable Long id) {

@@ -42,7 +42,7 @@ CREATE TABLE `sys_device` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='设备信息表';
 
 -- -----------------------------------------------------------
--- 3. 告警日志表
+-- 3. 告警日志表（未授权入侵待处理工单）
 -- -----------------------------------------------------------
 DROP TABLE IF EXISTS `alert_log`;
 CREATE TABLE `alert_log` (
@@ -51,14 +51,51 @@ CREATE TABLE `alert_log` (
     `image_url`       VARCHAR(500)  DEFAULT NULL            COMMENT '告警抓拍图片URL',
     `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0      COMMENT '目标接近度（0~1 浮点数）',
     `danger_level`    INT           NOT NULL DEFAULT 0      COMMENT '危险等级（0-安全, 1-注意, 2-警告, 3-危险）',
-    `status`          TINYINT       NOT NULL DEFAULT 0      COMMENT '处理状态（0-未处理, 1-已处理）',
+    `auth_status`     VARCHAR(20)   DEFAULT NULL            COMMENT 'AUTHORIZED / UNAUTHORIZED',
+    `recognized_name` VARCHAR(100)  DEFAULT NULL            COMMENT '识别到的姓名',
+    `status`          TINYINT       NOT NULL DEFAULT 0      COMMENT '处理状态（0-未处理/待处理工单, 1-已处理）',
     `create_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `deleted`         TINYINT       NOT NULL DEFAULT 0 COMMENT '逻辑删除（0-未删除, 1-已删除）',
     `delete_time`     DATETIME      DEFAULT NULL COMMENT '逻辑删除时间',
     PRIMARY KEY (`id`),
     KEY `idx_device_id` (`device_id`),
-    KEY `idx_create_time` (`create_time`)
+    KEY `idx_create_time` (`create_time`),
+    KEY `idx_auth_status` (`auth_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='告警日志表';
+
+-- -----------------------------------------------------------
+-- 4. 授权人员白名单（人脸比对库）
+-- -----------------------------------------------------------
+DROP TABLE IF EXISTS `sys_authorized_user`;
+CREATE TABLE `sys_authorized_user` (
+    `id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `user_code`   VARCHAR(50)  NOT NULL                COMMENT '工号',
+    `name`        VARCHAR(50)  NOT NULL                COMMENT '姓名',
+    `department`  VARCHAR(100) DEFAULT NULL            COMMENT '部门',
+    `avatar_url`  VARCHAR(500) DEFAULT NULL            COMMENT '人脸照片路径',
+    `status`      TINYINT      NOT NULL DEFAULT 1      COMMENT '1-启用 / 0-禁用',
+    `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_code` (`user_code`),
+    KEY `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='授权人员白名单';
+
+-- -----------------------------------------------------------
+-- 5. 授权通行日志
+-- -----------------------------------------------------------
+DROP TABLE IF EXISTS `passage_log`;
+CREATE TABLE `passage_log` (
+    `id`              BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `device_id`       BIGINT        NOT NULL                COMMENT '关联设备ID',
+    `recognized_name` VARCHAR(100)  DEFAULT NULL            COMMENT '识别姓名',
+    `auth_status`     VARCHAR(20)   NOT NULL DEFAULT 'AUTHORIZED' COMMENT '授权状态',
+    `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0      COMMENT '面积占比 / 接近度',
+    `image_url`       VARCHAR(500)  DEFAULT NULL            COMMENT '抓拍图片URL',
+    `create_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '通行时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_device_id` (`device_id`),
+    KEY `idx_create_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='授权通行日志';
 
 -- ============================================================
 -- 基础测试数据
@@ -75,6 +112,11 @@ INSERT INTO `sys_device` (`device_name`, `location`, `status`) VALUES
 ('前门摄像头-A01', '1号楼正门入口', 1),
 ('后门摄像头-B01', '1号楼后门通道', 1),
 ('侧门摄像头-C01', '2号楼侧门', 0);
+
+-- 授权人员白名单示例（人脸照片路径可后续通过管理接口更新）
+INSERT INTO `sys_authorized_user` (`user_code`, `name`, `department`, `avatar_url`, `status`) VALUES
+('CKJ001', '陈柯杰', '信息工程学院', NULL, 1),
+('SEC001', '安保值班员', '保卫处', NULL, 1);
 
 -- ============================================================
 -- 商业级种子数据：55 条历史告警（答辩演示专用）

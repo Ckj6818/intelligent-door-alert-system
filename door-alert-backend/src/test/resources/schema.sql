@@ -26,9 +26,34 @@ CREATE TABLE IF NOT EXISTS `alert_log` (
     `image_url`       VARCHAR(500)  DEFAULT NULL,
     `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0,
     `danger_level`    INT           NOT NULL DEFAULT 0,
+    `auth_status`     VARCHAR(20)   DEFAULT NULL,
+    `recognized_name` VARCHAR(100)  DEFAULT NULL,
     `status`          TINYINT       NOT NULL DEFAULT 0,
     `create_time`     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `deleted`         INT           DEFAULT 0,
     `delete_time`     TIMESTAMP     DEFAULT NULL,
+    PRIMARY KEY (`id`)
+);
+
+CREATE TABLE IF NOT EXISTS `sys_authorized_user` (
+    `id`          BIGINT       NOT NULL AUTO_INCREMENT,
+    `user_code`   VARCHAR(50)  NOT NULL,
+    `name`        VARCHAR(50)  NOT NULL,
+    `department`  VARCHAR(100) DEFAULT NULL,
+    `avatar_url`  VARCHAR(500) DEFAULT NULL,
+    `status`      TINYINT      NOT NULL DEFAULT 1,
+    `create_time` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE (`user_code`)
+);
+
+CREATE TABLE IF NOT EXISTS `passage_log` (
+    `id`              BIGINT        NOT NULL AUTO_INCREMENT,
+    `device_id`       BIGINT        NOT NULL,
+    `recognized_name` VARCHAR(100)  DEFAULT NULL,
+    `auth_status`     VARCHAR(20)   NOT NULL DEFAULT 'AUTHORIZED',
+    `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0,
+    `image_url`       VARCHAR(500)  DEFAULT NULL,
+    `create_time`     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`)
 );

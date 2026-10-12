@@ -6,24 +6,39 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.entity.AlertLog;
+import com.dooralert.entity.PassageLog;
 import com.dooralert.mapper.AlertLogMapper;
 import com.dooralert.service.AlertLogService;
+import com.dooralert.service.PassageLogService;
 import com.dooralert.vo.AlertLogVO;
+import com.dooralert.vo.AlertWsPayload;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> implements AlertLogService {
 
+    public static final String AUTH_AUTHORIZED = "AUTHORIZED";
+    public static final String AUTH_UNAUTHORIZED = "UNAUTHORIZED";
+
+    @Autowired
+    private PassageLogService passageLogService;
+
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
-        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
-        wrapper.eq(AlertLog::getDeleted, 0); // 仅查询未被逻辑删除的记录
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 0);
         wrapper.orderByDesc(AlertLog::getCreateTime);
         Page<AlertLog> page = this.page(new Page<>(current, size), wrapper);
         return page.convert(this::toVO);
@@ -42,7 +57,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     public boolean addAlert(AlertLogDTO dto) {
         AlertLog entity = new AlertLog();
         BeanUtils.copyProperties(dto, entity);
-        entity.setDeleted(0); // 默认未删除
+        entity.setDeleted(0);
         return this.save(entity);
     }
 
@@ -68,62 +83,153 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     }
 
     @Override
-    public AlertLogVO uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file) {
-        log.info("接收到边缘端告警数据，设备ID: {}", dto.getDeviceId());
+    public AlertWsPayload uploadAlert(AlertUploadDTO dto, MultipartFile file) {
+        String authStatus = normalizeAuthStatus(dto.getAuthStatus());
+        String recognizedName = StringUtils.hasText(dto.getRecognizedName())
+                ? dto.getRecognizedName().trim()
+                : (AUTH_AUTHORIZED.equals(authStatus) ? "未知授权人员" : "未授权人员/陌生人");
 
+        log.info("边缘端上报: deviceId={}, authStatus={}, recognizedName={}, areaRatio={}",
+                dto.getDeviceId(), authStatus, recognizedName, dto.getProximityRatio());
+
+        String imageUrl = persistSnapshot(file, dto.getSnapshotBase64());
+
+        if (AUTH_AUTHORIZED.equals(authStatus)) {
+            return savePassageLog(dto, recognizedName, imageUrl);
+        }
+        return saveUnauthorizedAlert(dto, recognizedName, imageUrl, authStatus);
+    }
+
+    /**
+     * UNAUTHORIZED：写入 alert_log，标记为待处理工单 (status=0)
+     */
+    private AlertWsPayload saveUnauthorizedAlert(AlertUploadDTO dto, String recognizedName,
+                                                 String imageUrl, String authStatus) {
         AlertLog entity = new AlertLog();
         entity.setDeviceId(dto.getDeviceId());
         entity.setProximityRatio(dto.getProximityRatio());
-        entity.setDangerLevel(dto.getDangerLevel());
-        // 默认未处理
-        entity.setStatus(0);
-
-        // 处理文件上传
-        if (file != null && !file.isEmpty()) {
-            try {
-                // 定义项目根目录下的 uploads 文件夹的绝对路径
-                java.io.File uploadDir = new java.io.File(System.getProperty("user.dir"), "uploads");
-                if (!uploadDir.exists()) {
-                    boolean created = uploadDir.mkdirs();
-                    log.info("创建上传目录 uploads: {}, 绝对路径: {}", created, uploadDir.getAbsolutePath());
-                }
-                
-                // 生成唯一文件名
-                String originalFilename = file.getOriginalFilename();
-                String suffix = originalFilename != null && originalFilename.contains(".") 
-                        ? originalFilename.substring(originalFilename.lastIndexOf(".")) 
-                        : ".jpg";
-                String newFilename = java.util.UUID.randomUUID().toString().replace("-", "") + suffix;
-                
-                // 保存文件到本地磁盘
-                java.io.File dest = new java.io.File(uploadDir, newFilename);
-                log.info("准备保存图片到路径: {}", dest.getAbsolutePath());
-                file.transferTo(dest);
-                log.info("图片保存成功");
-                
-                // 设置图片相对路径，前端可直接通过 /uploads/xxx.jpg 访问
-                entity.setImageUrl("/uploads/" + newFilename);
-            } catch (Exception e) {
-                log.error("图片保存或上传失败", e);
-                e.printStackTrace();
-            }
-        } else {
-            log.warn("上传接口未接收到图片文件或文件为空");
+        entity.setDangerLevel(dto.getDangerLevel() != null ? dto.getDangerLevel() : 2);
+        entity.setAuthStatus(authStatus);
+        entity.setRecognizedName(recognizedName);
+        entity.setImageUrl(imageUrl);
+        entity.setStatus(0); // 待处理工单
+        entity.setDeleted(0);
+        this.save(entity);
+        if (entity.getCreateTime() == null) {
+            entity.setCreateTime(java.time.LocalDateTime.now());
         }
 
-        this.save(entity);
+        log.info("未授权告警已入库(待处理工单): id={}, name={}", entity.getId(), recognizedName);
 
-        log.info("告警数据入库成功，记录ID: {}, 设备ID: {}, 危险等级: {}",
-                entity.getId(), entity.getDeviceId(), entity.getDangerLevel());
+        return AlertWsPayload.builder()
+                .alertId(entity.getId())
+                .authStatus(entity.getAuthStatus())
+                .recognizedName(entity.getRecognizedName())
+                .areaRatio(entity.getProximityRatio())
+                .alertLevel(entity.getDangerLevel())
+                .imageUrl(entity.getImageUrl())
+                .timestamp(entity.getCreateTime())
+                .eventType("ALERT")
+                .deviceId(entity.getDeviceId())
+                .status(entity.getStatus())
+                .build();
+    }
 
-        return toVO(entity);
+    /**
+     * AUTHORIZED：写入通行日志，不进入告警工单队列
+     */
+    private AlertWsPayload savePassageLog(AlertUploadDTO dto, String recognizedName, String imageUrl) {
+        PassageLog passage = new PassageLog();
+        passage.setDeviceId(dto.getDeviceId());
+        passage.setRecognizedName(recognizedName);
+        passage.setAuthStatus(AUTH_AUTHORIZED);
+        passage.setProximityRatio(dto.getProximityRatio());
+        passage.setImageUrl(imageUrl);
+        passageLogService.save(passage);
+        if (passage.getCreateTime() == null) {
+            passage.setCreateTime(java.time.LocalDateTime.now());
+        }
+
+        log.info("授权通行日志已记录: id={}, name={}", passage.getId(), recognizedName);
+
+        return AlertWsPayload.builder()
+                .alertId(passage.getId())
+                .authStatus(AUTH_AUTHORIZED)
+                .recognizedName(recognizedName)
+                .areaRatio(passage.getProximityRatio())
+                .alertLevel(0)
+                .imageUrl(passage.getImageUrl())
+                .timestamp(passage.getCreateTime())
+                .eventType("PASSAGE")
+                .deviceId(passage.getDeviceId())
+                .status(1)
+                .build();
+    }
+
+    private String normalizeAuthStatus(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return AUTH_UNAUTHORIZED;
+        }
+        String upper = raw.trim().toUpperCase(Locale.ROOT);
+        if (AUTH_AUTHORIZED.equals(upper)) {
+            return AUTH_AUTHORIZED;
+        }
+        return AUTH_UNAUTHORIZED;
+    }
+
+    /**
+     * 优先使用 multipart 文件；否则尝试解码 snapshot_base64
+     */
+    private String persistSnapshot(MultipartFile file, String snapshotBase64) {
+        java.io.File uploadDir = new java.io.File(System.getProperty("user.dir"), "uploads");
+        if (!uploadDir.exists()) {
+            boolean created = uploadDir.mkdirs();
+            log.info("创建上传目录 uploads: {}, 路径: {}", created, uploadDir.getAbsolutePath());
+        }
+
+        if (file != null && !file.isEmpty()) {
+            try {
+                String originalFilename = file.getOriginalFilename();
+                String suffix = originalFilename != null && originalFilename.contains(".")
+                        ? originalFilename.substring(originalFilename.lastIndexOf("."))
+                        : ".jpg";
+                String newFilename = java.util.UUID.randomUUID().toString().replace("-", "") + suffix;
+                java.io.File dest = new java.io.File(uploadDir, newFilename);
+                file.transferTo(dest);
+                log.info("抓拍图片已保存: {}", dest.getAbsolutePath());
+                return "/uploads/" + newFilename;
+            } catch (Exception e) {
+                log.error("multipart 图片保存失败", e);
+            }
+        }
+
+        if (StringUtils.hasText(snapshotBase64)) {
+            try {
+                String pure = snapshotBase64;
+                int comma = pure.indexOf(',');
+                if (pure.startsWith("data:") && comma > 0) {
+                    pure = pure.substring(comma + 1);
+                }
+                byte[] bytes = Base64.getDecoder().decode(pure);
+                String newFilename = java.util.UUID.randomUUID().toString().replace("-", "") + ".jpg";
+                java.io.File dest = new java.io.File(uploadDir, newFilename);
+                java.nio.file.Files.write(dest.toPath(), bytes);
+                log.info("Base64 抓拍已落盘: {}", dest.getAbsolutePath());
+                return "/uploads/" + newFilename;
+            } catch (Exception e) {
+                log.error("snapshot_base64 解码/保存失败", e);
+            }
+        }
+
+        log.warn("未接收到有效抓拍图片");
+        return null;
     }
 
     @Override
     public List<AlertLogVO> listAllForExport() {
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
-        wrapper.eq(AlertLog::getDeleted, 0); // 仅导出未被逻辑删除的记录
+        wrapper.eq(AlertLog::getDeleted, 0);
         wrapper.orderByDesc(AlertLog::getCreateTime);
         return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
     }
@@ -147,23 +253,22 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Override
     public boolean logicalClearAll() {
-        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper = 
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
         wrapper.eq(AlertLog::getDeleted, 0)
-               .set(AlertLog::getDeleted, 1)
-               .set(AlertLog::getDeleteTime, java.time.LocalDateTime.now());
+                .set(AlertLog::getDeleted, 1)
+                .set(AlertLog::getDeleteTime, java.time.LocalDateTime.now());
         return this.update(wrapper);
     }
 
     @Override
     public List<AlertLogVO> listRecycleBin() {
-        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
-        // 查询已删除，且删除时间在 15 天内（或为空）的记录
         java.time.LocalDateTime limitTime = java.time.LocalDateTime.now().minusDays(15);
         wrapper.eq(AlertLog::getDeleted, 1)
-               .and(w -> w.ge(AlertLog::getDeleteTime, limitTime).or().isNull(AlertLog::getDeleteTime))
-               .orderByDesc(AlertLog::getDeleteTime);
+                .and(w -> w.ge(AlertLog::getDeleteTime, limitTime).or().isNull(AlertLog::getDeleteTime))
+                .orderByDesc(AlertLog::getDeleteTime);
         return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
     }
 
@@ -173,20 +278,17 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         if (entity == null || !Integer.valueOf(1).equals(entity.getDeleted())) {
             return false;
         }
-        entity.setDeleted(0);
-        
-        // 使用 LambdaUpdateWrapper 显式把 delete_time 更新为 null
-        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper = 
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
         wrapper.eq(AlertLog::getId, id)
-               .set(AlertLog::getDeleted, 0)
-               .set(AlertLog::getDeleteTime, null);
+                .set(AlertLog::getDeleted, 0)
+                .set(AlertLog::getDeleteTime, null);
         return this.update(wrapper);
     }
 
     @Override
     public boolean permanentClearRecycleBin() {
-        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper = 
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
         wrapper.eq(AlertLog::getDeleted, 1);
         this.remove(wrapper);

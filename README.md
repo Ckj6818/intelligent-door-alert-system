@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](./LICENSE)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.4-brightgreen.svg?style=flat-square&logo=springboot)](https://spring.io/projects/spring-boot)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
-[![YOLOv8](https://img.shields.io/badge/AI%20Model-YOLOv8m-orange.svg?style=flat-square)](https://github.com/ultralytics/ultralytics)
+[![YOLOv8](https://img.shields.io/badge/AI%20Model-YOLOv8n%20%2B%20SFace-orange.svg?style=flat-square)](https://github.com/ultralytics/ultralytics)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6.svg?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED.svg?style=flat-square&logo=docker)](https://www.docker.com/)
 [![CI Status](https://img.shields.io/badge/Build-Passing-success.svg?style=flat-square&logo=githubactions)](https://github.com/Ckj6818/intelligent-door-alert-system/actions)
@@ -15,7 +15,7 @@
   <b>基于 YOLOv8m 深度学习目标检测与 Spring Boot 3 + React 19 的高可靠边缘视觉安防与实时告警分发管理平台</b>
 </p>
 
-[简体中文](./README.md) | [API 接口设计文档](./docs/API_Design.md) | [数据库脚本](./docs/schema.sql)
+[简体中文](./README.md) | [数据库脚本](./docs/schema.sql) | [授权人脸迁移](./docs/migrate_auth_face.sql)
 
 </div>
 
@@ -188,14 +188,16 @@ intelligent-door-alert-system/
 ├── docker/                        # Docker 镜像构建相关脚本
 ├── docker-compose.yml             # 生产级多服务容器编排配置
 ├── docker-compose.camera.yml      # Linux 物理摄像头直通编排配置
-├── docs/                          # 系统设计、数据库脚本与接口文档
-│   ├── API_Design.md              # RESTful API 规范文档
+├── docs/                          # 数据库脚本与迁移
 │   ├── schema.sql                 # MySQL 表结构 DDL 定义
-│   └── seed_data.sql              # 演示测试种子数据
-├── door-alert-ai/                 # Python YOLOv8m 边缘 AI 视觉服务
-│   ├── doorAlert.py               # AI 推理主程序（接近度计算/异步上报/心跳）
+│   ├── seed_data.sql              # 演示测试种子数据
+│   └── migrate_auth_face.sql      # 授权人脸相关表迁移
+├── door-alert-ai/                 # Python 边缘 AI（YOLOv8n + YuNet/SFace）
+│   ├── doorAlert.py               # 检测 / 人脸授权 / 上报 / 心跳
+│   ├── models/                    # YuNet / SFace onnx（本地放置，不入库）
+│   ├── authorized_faces/          # 授权人脸白名单照片
 │   ├── requirements.txt           # Python 依赖清单
-│   └── demo/                      # 离线演示视频与静态图片源
+│   └── demo/                      # 离线演示素材
 ├── door-alert-backend/            # Spring Boot 3 后端核心工程
 │   ├── src/main/java/             # 业务逻辑代码（Controller/Service/Entity）
 │   ├── src/main/resources/        # 配置文件（application.yml）

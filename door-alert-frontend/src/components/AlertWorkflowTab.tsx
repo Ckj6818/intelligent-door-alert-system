@@ -163,6 +163,7 @@ export default function AlertWorkflowTab({
         setTrashItems(prev => prev.filter(t => t.id !== item.id));
         const restoredAlert: Alert = {
           id: 'AL-' + item.id,
+          rawId: item.id,
           time: new Date().toLocaleTimeString(),
           date: new Date().toISOString().split('T')[0],
           device: item.name.replace('_Alert', '').replace(/_\d+$/, ''),
@@ -172,7 +173,8 @@ export default function AlertWorkflowTab({
           status: '待复核',
           statusType: 'error',
           confidence: 0.92,
-          location: '已恢复防区'
+          location: '已恢复防区',
+          authStatus: 'UNAUTHORIZED',
         };
         setAlerts(prev => [restoredAlert, ...prev]);
         alert(`告警轨迹记录 ${item.id} 恢复成功。`);
@@ -204,6 +206,7 @@ export default function AlertWorkflowTab({
         trashItems.forEach(item => {
           const restored: Alert = {
             id: 'AL-' + item.id,
+            rawId: item.id,
             time: new Date().toLocaleTimeString(),
             date: new Date().toISOString().split('T')[0],
             device: item.name.replace('_Alert', '').replace(/_\d+$/, ''),
@@ -213,7 +216,8 @@ export default function AlertWorkflowTab({
             status: '待复核',
             statusType: 'error',
             confidence: 0.91,
-            location: '已恢复防区'
+            location: '已恢复防区',
+            authStatus: 'UNAUTHORIZED',
           };
           setAlerts(prev => [restored, ...prev]);
         });
@@ -379,6 +383,8 @@ export default function AlertWorkflowTab({
                     <span className={`px-2 py-0.5 rounded-full font-mono text-[10px] uppercase tracking-wider border ${
                       row.typeBadge === 'error'
                         ? 'bg-cyber-error-dim/10 border-cyber-error/30 text-cyber-error'
+                        : row.typeBadge === 'success'
+                        ? 'bg-cyber-secondary/10 border-cyber-secondary/30 text-cyber-secondary'
                         : row.typeBadge === 'primary'
                         ? 'bg-cyber-primary-dim/10 border-cyber-primary/30 text-cyber-primary'
                         : 'bg-cyber-warning-dim/10 border-cyber-warning/30 text-cyber-warning'

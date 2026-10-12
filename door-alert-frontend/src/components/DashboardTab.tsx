@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   TrendingUp, 
   Tv, 
@@ -11,10 +11,15 @@ import {
   AlertTriangle,
   Play,
   RotateCcw,
-  Check
+  Check,
+  Video,
+  RefreshCw
 } from 'lucide-react';
 import { DeviceStatus, LiveFeedItem, Alert } from '../types';
 import { addDevice, updateDevice, deleteDevice, getDeviceList } from '@/api/index';
+
+/** 边缘 AI YOLO 实时预览端口（与 doorAlert.py STREAM_PORT 一致） */
+const EDGE_STREAM_PORT = 8090;
 
 interface DashboardTabProps {
   searchQuery: string;
@@ -37,6 +42,35 @@ export default function DashboardTab({
 }: DashboardTabProps) {
   const [timeRange, setTimeRange] = useState<'1h' | '24h'>('24h');
   const [inferenceData, setInferenceData] = useState<{ x: number; y1: number; y2: number }[]>([]);
+  const [streamOnline, setStreamOnline] = useState(false);
+  const [streamKey, setStreamKey] = useState(0);
+
+  const streamUrl = useMemo(() => {
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    return `${window.location.protocol}//${host}:${EDGE_STREAM_PORT}/video`;
+  }, []);
+
+  // 探测边缘推流是否可用（不阻塞画面）
+  useEffect(() => {
+    let cancelled = false;
+    const host = window.location.hostname;
+    const healthUrl = `${window.location.protocol}//${host}:${EDGE_STREAM_PORT}/health`;
+    const check = () => {
+      fetch(healthUrl, { method: 'GET', cache: 'no-store' })
+        .then((r) => {
+          if (!cancelled) setStreamOnline(r.ok);
+        })
+        .catch(() => {
+          if (!cancelled) setStreamOnline(false);
+        });
+    };
+    check();
+    const timer = window.setInterval(check, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   // Device management modal state
   const [showDeviceModal, setShowDeviceModal] = useState(false);
@@ -257,6 +291,69 @@ export default function DashboardTab({
       <div className="grid grid-cols-12 gap-6">
         {/* Chart + Heartbeats on Left */}
         <div className="col-span-12 lg:col-span-8 space-y-6">
+          {/* YOLO 实时检测画面（边缘 MJPEG 流，非告警抓拍） */}
+          <div className="glass-panel p-4 rounded-lg relative overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-3 relative z-10">
+              <div className="flex items-center gap-2">
+                <Video className="w-5 h-5 text-cyber-primary" />
+                <div>
+                  <h3 className="text-data-lg text-cyber-primary font-bold uppercase tracking-wider font-sans">
+                    YOLO 实时检测画面
+                  </h3>
+                  <p className="text-data-sm text-on-surface-variant/80 font-sans">
+                    边缘节点摄像头连续推流（与本机检测窗口同步）
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono border ${
+                    streamOnline
+                      ? 'text-cyber-secondary border-cyber-secondary/40 bg-cyber-secondary/10'
+                      : 'text-on-surface-variant border-outline-variant/30 bg-cyber-surface-high/40'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      streamOnline ? 'bg-cyber-secondary animate-pulse' : 'bg-on-surface-variant'
+                    }`}
+                  />
+                  {streamOnline ? 'LIVE' : '离线'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStreamKey((k) => k + 1);
+                    setStreamOnline(false);
+                  }}
+                  className="p-1.5 rounded border border-outline-variant/30 text-on-surface-variant hover:text-cyber-primary hover:border-cyber-primary/40 transition-colors"
+                  title="重新连接视频流"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <div className="relative w-full aspect-video bg-black/60 rounded border border-outline-variant/20 overflow-hidden flex items-center justify-center">
+              <img
+                key={streamKey}
+                src={`${streamUrl}?t=${streamKey}`}
+                alt="YOLO 实时检测"
+                className="w-full h-full object-contain"
+                onLoad={() => setStreamOnline(true)}
+                onError={() => setStreamOnline(false)}
+              />
+              {!streamOnline && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 pointer-events-none px-4 text-center">
+                  <WifiOff className="w-8 h-8 text-on-surface-variant" />
+                  <p className="text-sm text-on-surface font-sans">未连接到边缘视频流</p>
+                  <p className="text-[11px] text-on-surface-variant font-mono break-all">
+                    请先启动 doorAlert.py，然后访问 {streamUrl}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Activity Chart panel */}
           <div className="glass-panel p-6 rounded-lg h-[400px] relative overflow-hidden flex flex-col">
             <div className="flex justify-between items-center mb-6 relative z-10">
@@ -265,7 +362,7 @@ export default function DashboardTab({
                   检测数据遥测图表
                 </h3>
                 <p className="text-data-sm text-on-surface-variant/80 font-sans">
-                  YOLOv8m 推理负载 与 识别成功置信度统计
+                  YOLOv8 推理负载 与 识别成功置信度统计
                 </p>
               </div>
               <div className="flex gap-2">
@@ -511,22 +608,44 @@ export default function DashboardTab({
 
             {/* Stream Scroll viewport */}
             <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-              {filteredLiveFeed.map((feed) => (
+              {filteredLiveFeed.map((feed) => {
+                const isAuth = feed.type === 'authorized';
+                const isThreat = feed.type === 'person';
+                return (
                 <div 
                   key={feed.id} 
-                  className="group cursor-pointer bg-cyber-surface-low rounded overflow-hidden border border-outline-variant/15 hover:border-cyber-primary/50 transition-all duration-200"
+                  className={`group cursor-pointer bg-cyber-surface-low rounded overflow-hidden border transition-all duration-200 ${
+                    isAuth
+                      ? 'border-cyber-secondary/40 hover:border-cyber-secondary/70'
+                      : isThreat
+                        ? 'border-cyber-error/30 hover:border-cyber-error/60'
+                        : 'border-outline-variant/15 hover:border-cyber-primary/50'
+                  }`}
                   onClick={() => alert(`正在调取监控节点详情。视频流ID: ${feed.id}。事件描述：${feed.title}。防区：${feed.zone}。AI 置信度：${feed.confidence}。`)}
                 >
                   <div className="h-32 bg-cyber-surface-lowest relative overflow-hidden">
-                    <img 
-                      className="w-full h-full object-cover opacity-85 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500" 
-                      src={feed.imageSrc} 
-                      alt={feed.title} 
-                    />
+                    {feed.imageSrc ? (
+                      <img 
+                        className="w-full h-full object-cover opacity-85 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500" 
+                        src={feed.imageSrc} 
+                        alt={feed.title} 
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-on-surface-variant text-xs">
+                        无抓拍
+                      </div>
+                    )}
                     <div className="absolute top-2 right-2 bg-black/75 backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono text-on-surface flex items-center gap-1.5 border border-outline-variant/20">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyber-primary" />
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        isAuth ? 'bg-cyber-secondary' : isThreat ? 'bg-cyber-error' : 'bg-cyber-primary'
+                      }`} />
                       {feed.confidence}
                     </div>
+                    {isAuth && (
+                      <div className="absolute top-2 left-2 bg-cyber-secondary/90 text-cyber-bg px-2 py-0.5 rounded text-[9px] font-bold">
+                        授权通行
+                      </div>
+                    )}
                     <div className="absolute bottom-2 left-2 bg-cyber-surface-lowest/90 px-2 py-0.5 rounded text-[8px] font-mono uppercase tracking-widest text-on-surface-variant/80 border border-outline-variant/20">
                       监控防区_{feed.zone.replace(' ', '_').toUpperCase()}
                     </div>
@@ -534,7 +653,9 @@ export default function DashboardTab({
 
                   <div className="p-3">
                     <div className="flex justify-between items-start mb-1">
-                      <p className="text-data-sm text-on-surface font-bold font-sans">{feed.title}</p>
+                      <p className={`text-data-sm font-bold font-sans ${isAuth ? 'text-cyber-secondary' : 'text-on-surface'}`}>
+                        {feed.title}
+                      </p>
                       <span className="text-[10px] text-on-surface-variant font-mono">{feed.time}</span>
                     </div>
                     <p className="text-xs text-on-surface-variant/85 font-sans">
@@ -542,7 +663,8 @@ export default function DashboardTab({
                     </p>
                   </div>
                 </div>
-              ))}
+              );
+              })}
               {filteredLiveFeed.length === 0 && (
                 <div className="text-center py-20 text-on-surface-variant text-xs font-sans">
                   未检测到符合搜索条件的活动流。

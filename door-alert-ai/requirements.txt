@@ -1,4 +1,16 @@
 ultralytics
 opencv-python
 requests
-flask
+numpy
+pillow
+# Windows Python3.12：dlib 回退（有 SFace 时可不用）
+dlib-bin
+face_recognition
+face_recognition_models
+# 模型放到 models/：
+#   face_detection_yunet_2023mar.onnx
+#   face_recognition_sface_2021dec.onnx  (~37MB，优先于 dlib)
+# GPU（推荐）：
+#   pip install torch torchvision --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cu124/ --trusted-host mirror.sjtu.edu.cn
+# CPU：
+#   pip install torch torchvision
