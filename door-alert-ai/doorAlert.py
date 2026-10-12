@@ -161,8 +161,16 @@ SFACE_MODEL_PATH = os.environ.get(
     "SFACE_MODEL_PATH",
     os.path.join("models", "face_recognition_sface_2021dec.onnx"),
 )
-# SFace 余弦相似度阈值（OpenCV 推荐 0.363，越高越严）
+# SFace 余弦相似度：>= 授权；<= 明确陌生人；中间为「识别中」不告警
 SFACE_COSINE_THRESHOLD = float(os.environ.get("SFACE_COSINE_THRESHOLD", "0.363"))
+SFACE_REJECT_THRESHOLD = float(os.environ.get("SFACE_REJECT_THRESHOLD", "0.28"))
+# 高置信授权可立刻通行（无需多帧）
+SFACE_STRONG_AUTH = float(os.environ.get("SFACE_STRONG_AUTH", "0.45"))
+# dlib：距离越小越像；超过 REJECT 才算明确陌生人
+FACE_REJECT_DISTANCE = float(os.environ.get("FACE_REJECT_DISTANCE", "0.70"))
+# 多帧确认：抑制走近时侧脸误报未授权
+UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "3"))
+AUTH_CONFIRM_FRAMES = int(os.environ.get("AUTH_CONFIRM_FRAMES", "2"))
 
 _yunet_detector = None
 _yunet_input_size = (0, 0)
@@ -189,6 +197,7 @@ _face_cache = {
     "auth_status": None,
     "recognized_name": "",
     "face_distance": None,
+    "face_similarity": None,
 }
 _face_job_lock = threading.Lock()
 _face_job = {
@@ -196,6 +205,30 @@ _face_job = {
     "last_submit": 0.0,
 }
 _last_noface_log = 0.0
+
+# 多帧确认：按「新的识别结果」累计，禁止主循环同帧重复加分
+_confirm_lock = threading.Lock()
+_confirm_state = {
+    "cx": 0.0,
+    "cy": 0.0,
+    "auth_streak": 0,
+    "unauth_streak": 0,
+    "last_sample_ts": 0.0,
+}
+
+# 未确认的原始比对结果（短 TTL，供多帧确认消费；不直接触发告警）
+_RAW_FACE_TTL = 1.2
+_raw_face_lock = threading.Lock()
+_raw_face = {
+    "cx": 0.0,
+    "cy": 0.0,
+    "ts": 0.0,
+    "auth_status": None,
+    "recognized_name": "",
+    "face_distance": None,
+    "face_similarity": None,
+    "face_found": False,
+}
 
 
 # =====================================================================
@@ -375,15 +408,25 @@ def _cache_hit(cx, cy, now):
             "auth_status": _face_cache["auth_status"],
             "recognized_name": _face_cache["recognized_name"],
             "face_distance": _face_cache["face_distance"],
+            "face_similarity": _face_cache.get("face_similarity"),
         }
 
 
-def _update_face_cache(cx, cy, result):
-    """仅缓存已得到人脸特征的结论；未检出脸不写缓存，便于立刻重试。"""
+def _update_face_cache(cx, cy, result, *, allow_unauth=False):
+    """
+    缓存识别结论。
+    - 已授权：始终缓存
+    - 未授权：仅多帧确认后（allow_unauth=True）才缓存，避免侧脸误报锁死 5s
+    - 识别中 / 未检出：不缓存
+    """
     if not result or not result.get("face_found"):
         return
     auth = result.get("auth_status")
-    if auth not in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
+    if auth == AUTH_STATUS_AUTHORIZED:
+        pass
+    elif auth == AUTH_STATUS_UNAUTHORIZED and allow_unauth:
+        pass
+    else:
         return
     with _face_cache_lock:
         _face_cache["cx"] = cx
@@ -392,6 +435,46 @@ def _update_face_cache(cx, cy, result):
         _face_cache["auth_status"] = auth
         _face_cache["recognized_name"] = result.get("recognized_name", "")
         _face_cache["face_distance"] = result.get("face_distance")
+        _face_cache["face_similarity"] = result.get("face_similarity")
+
+
+def _update_raw_face_result(cx, cy, result):
+    """写入短时原始比对结果，并按新样本累计确认 streak。"""
+    if not result or not result.get("face_found"):
+        return
+    ts = time.time()
+    result = dict(result)
+    result["result_ts"] = ts
+    with _raw_face_lock:
+        _raw_face["cx"] = cx
+        _raw_face["cy"] = cy
+        _raw_face["ts"] = ts
+        _raw_face["auth_status"] = result.get("auth_status")
+        _raw_face["recognized_name"] = result.get("recognized_name", "")
+        _raw_face["face_distance"] = result.get("face_distance")
+        _raw_face["face_similarity"] = result.get("face_similarity")
+        _raw_face["face_found"] = True
+    _note_face_sample(cx, cy, result)
+
+
+def _raw_face_hit(cx, cy, now):
+    with _raw_face_lock:
+        if not _raw_face.get("face_found"):
+            return None
+        if now - _raw_face["ts"] > _RAW_FACE_TTL:
+            return None
+        dx = cx - _raw_face["cx"]
+        dy = cy - _raw_face["cy"]
+        tol = FACE_CACHE_POS_TOL
+        if (dx * dx + dy * dy) > (tol * tol):
+            return None
+        return {
+            "auth_status": _raw_face["auth_status"],
+            "recognized_name": _raw_face["recognized_name"],
+            "face_distance": _raw_face["face_distance"],
+            "face_similarity": _raw_face.get("face_similarity"),
+            "from_confirmed_cache": False,
+        }
 
 
 def _apply_cache_to_detections(detections):
@@ -406,15 +489,132 @@ def _apply_cache_to_detections(detections):
             continue
         cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
         cached = _cache_hit(cx, cy, now)
+        from_confirmed = cached is not None
+        if cached is None:
+            cached = _raw_face_hit(cx, cy, now)
+            from_confirmed = False
         if cached is None:
             continue
         det["auth_status"] = cached["auth_status"]
         det["recognized_name"] = cached["recognized_name"]
         det["face_distance"] = cached["face_distance"]
+        det["face_similarity"] = cached.get("face_similarity")
+        det["from_confirmed_cache"] = from_confirmed
         if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
             det["danger_level"] = 0
-        else:
+        elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
             det["danger_level"] = 3 if det["area_ratio"] >= 0.3 else 2
+
+
+def _confirm_same_target(cx, cy):
+    """目标位置跳变则清零 streak。"""
+    dx = cx - _confirm_state["cx"]
+    dy = cy - _confirm_state["cy"]
+    tol = FACE_CACHE_POS_TOL
+    if (dx * dx + dy * dy) > (tol * tol):
+        _confirm_state["auth_streak"] = 0
+        _confirm_state["unauth_streak"] = 0
+        _confirm_state["last_sample_ts"] = 0.0
+    _confirm_state["cx"] = cx
+    _confirm_state["cy"] = cy
+
+
+def _note_face_sample(cx, cy, result):
+    """
+    仅在每次新的识别结果上累计 streak（由人脸线程调用）。
+    禁止主循环对同一结果反复 +1。
+    """
+    if not result or not result.get("face_found"):
+        return
+    sample_ts = float(result.get("result_ts") or time.time())
+    auth = result.get("auth_status")
+    with _confirm_lock:
+        _confirm_same_target(cx, cy)
+        if sample_ts <= _confirm_state["last_sample_ts"]:
+            return
+        _confirm_state["last_sample_ts"] = sample_ts
+        if auth == AUTH_STATUS_AUTHORIZED:
+            sim = result.get("face_similarity")
+            strong = (
+                FACE_ENGINE == "sface"
+                and isinstance(sim, (int, float))
+                and float(sim) >= SFACE_STRONG_AUTH
+            )
+            _confirm_state["unauth_streak"] = 0
+            if strong:
+                _confirm_state["auth_streak"] = AUTH_CONFIRM_FRAMES
+            else:
+                _confirm_state["auth_streak"] += 1
+        elif auth == AUTH_STATUS_UNAUTHORIZED:
+            _confirm_state["auth_streak"] = 0
+            _confirm_state["unauth_streak"] += 1
+        else:
+            # 识别中：打断未授权累计
+            _confirm_state["unauth_streak"] = 0
+            _confirm_state["auth_streak"] = 0
+
+
+def stabilize_auth_for_action(det):
+    """
+    根据已累计的识别样本决定是否可上报。
+    未确认时把 det 显示为识别中（auth_status=None）。
+    """
+    auth = det.get("auth_status")
+    cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
+
+    # 已写入长期缓存的结论：直接信任（已授权 / 已确认未授权）
+    if det.get("from_confirmed_cache"):
+        return auth
+
+    if auth == AUTH_STATUS_AUTHORIZED:
+        sim = det.get("face_similarity")
+        strong = (
+            FACE_ENGINE == "sface"
+            and isinstance(sim, (int, float))
+            and float(sim) >= SFACE_STRONG_AUTH
+        )
+        with _confirm_lock:
+            streak = _confirm_state["auth_streak"]
+        if streak >= AUTH_CONFIRM_FRAMES or strong:
+            _update_face_cache(
+                cx,
+                cy,
+                {
+                    "face_found": True,
+                    "auth_status": AUTH_STATUS_AUTHORIZED,
+                    "recognized_name": det.get("recognized_name", ""),
+                    "face_distance": det.get("face_distance"),
+                    "face_similarity": det.get("face_similarity"),
+                },
+            )
+            return AUTH_STATUS_AUTHORIZED
+        det["auth_status"] = None
+        return None
+
+    if auth == AUTH_STATUS_UNAUTHORIZED:
+        with _confirm_lock:
+            streak = _confirm_state["unauth_streak"]
+        if streak >= UNAUTH_CONFIRM_FRAMES:
+            _update_face_cache(
+                cx,
+                cy,
+                {
+                    "face_found": True,
+                    "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                    "recognized_name": det.get(
+                        "recognized_name", UNAUTHORIZED_DISPLAY_NAME
+                    ),
+                    "face_distance": det.get("face_distance"),
+                    "face_similarity": det.get("face_similarity"),
+                },
+                allow_unauth=True,
+            )
+            return AUTH_STATUS_UNAUTHORIZED
+        det["auth_status"] = None
+        det["recognized_name"] = ""
+        return None
+
+    return None
 
 
 def _crop_face_roi(frame_bgr, x1, y1, x2, y2):
@@ -556,38 +756,71 @@ def _sface_feature_from_bgr(bgr_roi):
 
 
 def _match_encoding(encoding, known_encodings, known_names):
+    """
+    三档判定：
+      - 已授权
+      - 识别中（模糊区间，不上报）
+      - 明确未授权
+    """
     if FACE_ENGINE == "sface":
         known = np.asarray(known_encodings, dtype=np.float64)
         vec = np.asarray(encoding, dtype=np.float64).reshape(-1)
-        # 余弦相似度：越高越像；距离用 1-sim 便于日志与阈值
         kn = np.linalg.norm(known, axis=1)
         vn = float(np.linalg.norm(vec))
         sims = (known @ vec) / np.maximum(kn * max(vn, 1e-8), 1e-8)
         best_idx = int(np.argmax(sims))
         best_sim = float(sims[best_idx])
         best_distance = 1.0 - best_sim
-        authorized = best_sim >= SFACE_COSINE_THRESHOLD
-    else:
-        distances = face_distance_np(known_encodings, encoding)
-        best_idx = int(np.argmin(distances))
-        best_distance = float(distances[best_idx])
-        authorized = best_distance < FACE_DISTANCE_THRESHOLD
-        best_sim = None
+        if best_sim >= SFACE_COSINE_THRESHOLD:
+            return {
+                "auth_status": AUTH_STATUS_AUTHORIZED,
+                "recognized_name": known_names[best_idx],
+                "face_distance": best_distance,
+                "face_found": True,
+                "face_similarity": best_sim,
+            }
+        if best_sim > SFACE_REJECT_THRESHOLD:
+            # 模糊：侧脸/光线差，继续识别中
+            return {
+                "auth_status": None,
+                "recognized_name": "",
+                "face_distance": best_distance,
+                "face_found": True,
+                "face_similarity": best_sim,
+            }
+        return {
+            "auth_status": AUTH_STATUS_UNAUTHORIZED,
+            "recognized_name": UNAUTHORIZED_DISPLAY_NAME,
+            "face_distance": best_distance,
+            "face_found": True,
+            "face_similarity": best_sim,
+        }
 
-    if authorized:
+    distances = face_distance_np(known_encodings, encoding)
+    best_idx = int(np.argmin(distances))
+    best_distance = float(distances[best_idx])
+    if best_distance < FACE_DISTANCE_THRESHOLD:
         return {
             "auth_status": AUTH_STATUS_AUTHORIZED,
             "recognized_name": known_names[best_idx],
             "face_distance": best_distance,
             "face_found": True,
-            "face_similarity": best_sim,
+            "face_similarity": None,
+        }
+    if best_distance < FACE_REJECT_DISTANCE:
+        return {
+            "auth_status": None,
+            "recognized_name": "",
+            "face_distance": best_distance,
+            "face_found": True,
+            "face_similarity": None,
         }
     return {
         "auth_status": AUTH_STATUS_UNAUTHORIZED,
         "recognized_name": UNAUTHORIZED_DISPLAY_NAME,
         "face_distance": best_distance,
         "face_found": True,
-        "face_similarity": best_sim if FACE_ENGINE == "sface" else None,
+        "face_similarity": None,
     }
 
 
@@ -761,6 +994,12 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         result = _match_encoding(encoding, known_encodings, known_names)
         ms = (time.perf_counter() - t0) * 1000
         sim = result.get("face_similarity")
+        if result.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+            status_txt = "已授权"
+        elif result.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
+            status_txt = "未授权"
+        else:
+            status_txt = "识别中"
         extra = (
             f" 相似度={sim:.3f}"
             if isinstance(sim, float)
@@ -768,9 +1007,7 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         )
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"人脸识别 {ms:.0f}ms ({method}) | "
-            f"{'已授权' if result['auth_status'] == AUTH_STATUS_AUTHORIZED else '未授权'} |"
-            f"{extra}"
+            f"人脸识别 {ms:.0f}ms ({method}) | {status_txt} |{extra}"
         )
         return result
     except Exception as exc:
@@ -779,12 +1016,26 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
 
 
 def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names, cx, cy):
-    """后台线程执行人脸比对，写缓存，不阻塞 YOLO/预览。"""
+    """后台线程执行人脸比对；新样本计入确认 streak，强授权可直接缓存。"""
     try:
         result = recognize_face_in_roi(
             frame_bgr, x1, y1, x2, y2, known_encodings, known_names
         )
-        _update_face_cache(cx, cy, result)
+        if not result or not result.get("face_found"):
+            return
+        result = dict(result)
+        result["result_ts"] = time.time()
+        sim = result.get("face_similarity")
+        strong = (
+            result.get("auth_status") == AUTH_STATUS_AUTHORIZED
+            and FACE_ENGINE == "sface"
+            and isinstance(sim, (int, float))
+            and float(sim) >= SFACE_STRONG_AUTH
+        )
+        # 所有有效样本都进 raw + streak；强授权额外写入长期缓存
+        _update_raw_face_result(cx, cy, result)
+        if strong:
+            _update_face_cache(cx, cy, result)
     finally:
         with _face_job_lock:
             _face_job["busy"] = False
@@ -802,12 +1053,24 @@ def schedule_face_recognition(frame_bgr, det, known_encodings, known_names):
         det["auth_status"] = cached["auth_status"]
         det["recognized_name"] = cached["recognized_name"]
         det["face_distance"] = cached["face_distance"]
+        det["face_similarity"] = cached.get("face_similarity")
+        det["from_confirmed_cache"] = True
+        return
+    raw = _raw_face_hit(cx, cy, now)
+    if raw is not None:
+        det["auth_status"] = raw["auth_status"]
+        det["recognized_name"] = raw["recognized_name"]
+        det["face_distance"] = raw["face_distance"]
+        det["face_similarity"] = raw.get("face_similarity")
+        det["from_confirmed_cache"] = False
         return
 
-    # 识别中：不占位 UNAUTHORIZED，避免 4~5s 误报与“很慢才认出”
+    # 识别中：不占位 UNAUTHORIZED，避免侧脸误报
     det["auth_status"] = None
     det["recognized_name"] = ""
     det["face_distance"] = None
+    det["face_similarity"] = None
+    det["from_confirmed_cache"] = False
 
     with _face_job_lock:
         busy = _face_job["busy"]
@@ -1511,12 +1774,18 @@ def main():
         f"缓存={FACE_CACHE_TTL}s, ROI<={FACE_ROI_MAX_SIDE}"
     )
     if FACE_ENGINE == "sface":
-        thr_desc = f"余弦阈值>={SFACE_COSINE_THRESHOLD}"
+        thr_desc = (
+            f"授权>={SFACE_COSINE_THRESHOLD}, 拒绝<={SFACE_REJECT_THRESHOLD}, "
+            f"强授权>={SFACE_STRONG_AUTH}"
+        )
     else:
-        thr_desc = f"距离阈值={FACE_DISTANCE_THRESHOLD}"
+        thr_desc = (
+            f"授权距离<{FACE_DISTANCE_THRESHOLD}, 拒绝距离>={FACE_REJECT_DISTANCE}"
+        )
     print(
         f"[INFO] 人脸门控: engine={FACE_ENGINE}, R>={PROXIMITY_ALERT_THRESHOLD}, "
-        f"{thr_desc}, 授权人员={len(known_encodings)} 人"
+        f"{thr_desc}, 未授权确认={UNAUTH_CONFIRM_FRAMES}帧, "
+        f"授权确认={AUTH_CONFIRM_FRAMES}帧, 授权人员={len(known_encodings)} 人"
     )
     print("[INFO] 支持管理端新增后热加载（检测 authorized_faces/.reload）")
     if is_image_mode:
@@ -1665,8 +1934,12 @@ def main():
                     det["auth_status"] = face_result.get("auth_status")
                     det["recognized_name"] = face_result.get("recognized_name", "")
                     det["face_distance"] = face_result.get("face_distance")
+                    det["face_similarity"] = face_result.get("face_similarity")
                     cx, cy = _bbox_center(x1, y1, x2, y2)
-                    _update_face_cache(cx, cy, face_result)
+                    if face_result.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+                        _update_face_cache(cx, cy, face_result)
+                    elif face_result.get("face_found"):
+                        _update_raw_face_result(cx, cy, face_result)
                     if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
                         det["danger_level"] = 0
                     elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
@@ -1786,6 +2059,8 @@ def main():
         in_cooldown = (current_time - last_alert_time) < COOL_DOWN_INTERVAL
 
         if primary_det is not None:
+            # 先多帧确认（未满帧会把显示态改回识别中），再画框/上报
+            stable_auth = stabilize_auth_for_action(primary_det)
             draw_live_detection(
                 frame,
                 primary_det["x1"], primary_det["y1"],
@@ -1796,20 +2071,16 @@ def main():
                 recognized_name=primary_det.get("recognized_name", ""),
                 area_ratio=primary_det.get("area_ratio", 0.0),
             )
-
             if primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
                 put_cn_text(
                     frame, "警告：未授权人员！", (50, 50), (0, 0, 255), font_size=34,
                 )
 
-            # 仅在已有明确结论时动作：授权通行 / 未授权告警（识别中不告警）
-            if primary_det.get("auth_status") in (
-                AUTH_STATUS_AUTHORIZED,
-                AUTH_STATUS_UNAUTHORIZED,
-            ):
+            if stable_auth in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
+                primary_det["auth_status"] = stable_auth
                 if (
                     not in_cooldown
-                    or primary_det.get("auth_status") == AUTH_STATUS_AUTHORIZED
+                    or stable_auth == AUTH_STATUS_AUTHORIZED
                 ):
                     dispatch_detection_action(frame_clean, primary_det)
         else:
