@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { 
   Filter, 
-  Download, 
   Trash2, 
   RotateCw, 
   Layers, 
@@ -12,8 +11,7 @@ import {
   Camera
 } from 'lucide-react';
 import { Alert, TrashItem, LiveFeedItem, AuthStatus } from '../types';
-import * as XLSX from 'xlsx';
-import { handleAlert, deleteAlert, restoreAlert, clearAllAlerts, exportAlerts, clearRecycleBinPermanently } from '@/api/index';
+import { handleAlert, deleteAlert, restoreAlert, clearAllAlerts, clearRecycleBinPermanently } from '@/api/index';
 
 /** 从告警行提取回收站快照（保留 authStatus 等字段） */
 function alertToTrashItem(al: Alert, deletedTime = '刚刚'): TrashItem {
@@ -145,40 +143,6 @@ export default function AlertWorkflowTab({
           console.error('Batch delete failed', err);
           alert('批量删除出现异常，请确认网络连接与后端状态。');
         });
-    }
-  };
-
-  const handleExportLogs = async () => {
-    try {
-      const records = await exportAlerts();
-      if (!records || records.length === 0) {
-        alert('No alert logs available for export.');
-        return;
-      }
-      // 后端 /export 已按 app.public-base-url 或请求头拼好绝对 URL；相对路径则同源拼接
-      const rows = records.map((item: any) => {
-        const raw = item.imageUrl as string | undefined;
-        const imgUrl = !raw
-          ? '-'
-          : raw.startsWith('http')
-            ? raw
-            : `${window.location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`;
-        return {
-          '告警时间': new Date(item.createTime).toLocaleString(),
-          '设备ID': item.deviceId,
-          '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
-          '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
-          '抓拍图片链接': imgUrl,
-          '处置状态': item.status === 1 ? '已处理' : '待复核'
-        };
-      });
-      const worksheet = XLSX.utils.json_to_sheet(rows);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录');
-      XLSX.writeFile(workbook, '智能门禁告警工作流日志.xlsx');
-      alert('门禁安防报警处置工作流日志已成功导出为 Excel 表格。');
-    } catch (error) {
-      console.error('Export failed', error);
     }
   };
 
@@ -329,14 +293,6 @@ export default function AlertWorkflowTab({
               批量删除 ({selectedIds.length})
             </button>
           )}
-
-          <button
-            onClick={handleExportLogs}
-            className="px-4 py-2 bg-cyber-primary text-cyber-bg font-sans text-xs font-bold rounded flex items-center gap-2 hover:shadow-[0_0_15px_rgba(0,218,243,0.3)] transition-all active:scale-95 cursor-pointer"
-          >
-            <Download className="w-4 h-4" />
-            导出表格日志
-          </button>
         </div>
       </div>
 

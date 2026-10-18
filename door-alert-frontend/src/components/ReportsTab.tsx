@@ -67,8 +67,9 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
           '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
           '告警类型': item.alertType || 'INTRUSION',
-          '图片链接': imgUrl,
-          '状态': item.status === 1 ? '已处理' : '未处理'
+          '识别姓名': item.recognizedName || '-',
+          '抓拍图片链接': imgUrl,
+          '处置状态': item.status === 1 ? '已处理' : '待复核',
         };
       });
       const worksheet = XLSX.utils.json_to_sheet(rows);
