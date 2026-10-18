@@ -329,43 +329,60 @@ export default function DashboardTab({
             <span>近 7 日</span>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <p className="text-[10px] text-on-surface-variant">授权通行</p>
-            <p className="text-3xl font-bold text-cyber-secondary tabular-nums">{compare.passageCount}</p>
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="rounded-lg border border-outline-variant/20 bg-cyber-surface-lowest/60 px-4 py-3">
+            <p className="text-[10px] text-on-surface-variant font-sans">授权通行</p>
+            <p className="text-3xl font-bold text-cyber-secondary tabular-nums mt-1 leading-none">
+              {compare.passageCount}
+            </p>
           </div>
-          <div>
-            <p className="text-[10px] text-on-surface-variant">未授权告警</p>
-            <p className="text-3xl font-bold text-cyber-error tabular-nums">{compare.unauthorizedAlertCount}</p>
+          <div className="rounded-lg border border-outline-variant/20 bg-cyber-surface-lowest/60 px-4 py-3">
+            <p className="text-[10px] text-on-surface-variant font-sans">未授权告警</p>
+            <p className="text-3xl font-bold text-cyber-error tabular-nums mt-1 leading-none">
+              {compare.unauthorizedAlertCount}
+            </p>
           </div>
         </div>
-        <div className="flex items-end gap-1.5 h-24">
+        <div className="flex items-stretch gap-1.5 h-20 pt-1">
           {(() => {
             const max = Math.max(
               1,
               ...compare.days.map((d) => Math.max(d.passages || 0, d.alerts || 0)),
             );
             const barHeight = (value: number) => {
-              const pct = ((value || 0) / max) * 100;
-              // 零值保留底线，避免整列塌缩成空洞
-              return `max(2px, ${pct}%)`;
+              const n = value || 0;
+              if (n <= 0) return '4px';
+              const pct = (n / max) * 100;
+              return `max(4px, ${pct}%)`;
             };
+            const barTone = (value: number, activeClass: string, idleClass: string) =>
+              (value || 0) > 0 ? activeClass : idleClass;
             return compare.days.map((day) => {
               const label = (day.date || '').slice(5); // MM-DD
+              const passages = day.passages || 0;
+              const alerts = day.alerts || 0;
               return (
                 <div
                   key={day.date}
-                  className="flex-1 flex flex-col items-center gap-1 min-w-0 h-full"
-                  title={`${day.date} · 通行 ${day.passages || 0} · 告警 ${day.alerts || 0}`}
+                  className="flex-1 flex flex-col items-center gap-1.5 min-w-0 h-full"
+                  title={`${day.date} · 通行 ${passages} · 告警 ${alerts}`}
                 >
-                  <div className="w-full flex-1 flex items-end justify-center gap-0.5 min-h-0">
+                  <div className="w-full flex-1 flex items-end justify-center gap-1 min-h-0 border-b border-outline-variant/25 pb-px">
                     <div
-                      className="w-[42%] max-w-[14px] bg-cyber-secondary/80 rounded-t-sm"
-                      style={{ height: barHeight(day.passages || 0) }}
+                      className={`w-[45%] max-w-[16px] rounded-t-sm ${barTone(
+                        passages,
+                        'bg-cyber-secondary/85',
+                        'bg-cyber-secondary/20',
+                      )}`}
+                      style={{ height: barHeight(passages) }}
                     />
                     <div
-                      className="w-[42%] max-w-[14px] bg-cyber-error/80 rounded-t-sm"
-                      style={{ height: barHeight(day.alerts || 0) }}
+                      className={`w-[45%] max-w-[16px] rounded-t-sm ${barTone(
+                        alerts,
+                        'bg-cyber-error/85',
+                        'bg-cyber-error/20',
+                      )}`}
+                      style={{ height: barHeight(alerts) }}
                     />
                   </div>
                   <span className="text-[9px] font-mono text-on-surface-variant/80 tabular-nums leading-none">
