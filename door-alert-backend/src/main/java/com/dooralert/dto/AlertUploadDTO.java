@@ -24,6 +24,9 @@ public class AlertUploadDTO {
     /** 识别姓名（兼容 recognized_name / recognizedName） */
     private String recognizedName;
 
+    /** INTRUSION / TAILGATING / LOITERING（兼容 alert_type / alertType） */
+    private String alertType;
+
     /** 可选：边缘端直接传来的 JPEG Base64（无 file 时落盘） */
     private String snapshotBase64;
 }

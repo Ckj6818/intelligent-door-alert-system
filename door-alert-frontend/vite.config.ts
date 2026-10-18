@@ -34,6 +34,12 @@ export default defineConfig(() => {
           target: 'http://localhost:8081',
           changeOrigin: true,
         },
+        // 边缘 YOLO MJPEG：同源 /video-stream → :8090，避免 HTTPS Mixed Content
+        '/video-stream': {
+          target: 'http://localhost:8090',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/video-stream/, ''),
+        },
       },
     },
   };

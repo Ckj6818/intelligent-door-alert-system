@@ -33,3 +33,8 @@ sa-token:
 device:
   heartbeat:
     timeout-seconds: 30
+
+# 门锁/电机联动：开锁后自动上锁保持时长（秒）
+door:
+  lock:
+    hold-seconds: 5

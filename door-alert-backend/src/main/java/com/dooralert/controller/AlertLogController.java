@@ -8,9 +8,11 @@ import com.dooralert.common.Result;
 import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.service.AlertLogService;
+import com.dooralert.util.PublicBaseUrlResolver;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
 import com.dooralert.ws.AlertWebSocketServer;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
@@ -28,6 +30,9 @@ public class AlertLogController {
     @Autowired
     private AlertLogService alertLogService;
 
+    @Autowired
+    private PublicBaseUrlResolver publicBaseUrlResolver;
+
     /**
      * 分页查询告警列表
      */
@@ -39,12 +44,14 @@ public class AlertLogController {
     }
 
     /**
-     * 导出告警列表（仅 ADMIN 管理员角色可访问，安保人员直连将返回 403）
+     * 导出告警列表（仅 ADMIN 管理员角色可访问，安保人员直连将返回 403）。
+     * imageUrl 拼为外部可访问绝对地址（app.public-base-url 或 X-Forwarded-* / 当前请求）。
      */
     @GetMapping("/export")
     @SaCheckRole("ADMIN")
-    public Result<List<AlertLogVO>> export() {
-        return Result.success(alertLogService.listAllForExport());
+    public Result<List<AlertLogVO>> export(HttpServletRequest request) {
+        String baseUrl = publicBaseUrlResolver.resolveBaseUrl(request);
+        return Result.success(alertLogService.listAllForExport(baseUrl));
     }
 
     /**
@@ -155,6 +162,8 @@ public class AlertLogController {
             @RequestParam(value = "authStatus", required = false) String authStatusCamel,
             @RequestParam(value = "recognized_name", required = false) String recognizedNameSnake,
             @RequestParam(value = "recognizedName", required = false) String recognizedNameCamel,
+            @RequestParam(value = "alert_type", required = false) String alertTypeSnake,
+            @RequestParam(value = "alertType", required = false) String alertTypeCamel,
             @RequestParam(value = "snapshot_base64", required = false) String snapshotBase64,
             @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
         try {
@@ -167,6 +176,7 @@ public class AlertLogController {
             dto.setDangerLevel(dangerLevel != null ? dangerLevel : 2);
             dto.setAuthStatus(firstNonBlank(authStatusSnake, authStatusCamel));
             dto.setRecognizedName(firstNonBlank(recognizedNameSnake, recognizedNameCamel));
+            dto.setAlertType(firstNonBlank(alertTypeSnake, alertTypeCamel));
             dto.setSnapshotBase64(snapshotBase64);
 
             AlertWsPayload payload = alertLogService.uploadAlert(dto, file);

@@ -172,6 +172,56 @@ class AlertLogServiceTest {
     }
 
     @Test
+    @Order(5)
+    @DisplayName("恢复告警 — 不得覆盖原有 auth_status（含 AUTHORIZED）")
+    void restoreAlert_shouldPreserveAuthStatus() {
+        AlertLog entity = new AlertLog();
+        entity.setDeviceId(testDeviceId);
+        entity.setProximityRatio(0.42);
+        entity.setDangerLevel(1);
+        entity.setStatus(0);
+        entity.setDeleted(0);
+        entity.setAuthStatus("AUTHORIZED");
+        entity.setRecognizedName("陈柯杰");
+        entity.setImageUrl("/uploads/keep-me.jpg");
+        alertLogMapper.insert(entity);
+
+        assertTrue(alertLogService.logicalDeleteAlert(entity.getId()));
+        assertTrue(alertLogService.restoreAlert(entity.getId()));
+
+        AlertLog reloaded = alertLogMapper.selectById(entity.getId());
+        assertNotNull(reloaded);
+        assertEquals(0, reloaded.getDeleted());
+        assertNull(reloaded.getDeleteTime());
+        assertEquals("AUTHORIZED", reloaded.getAuthStatus(), "还原不得把 auth_status 改成 UNAUTHORIZED");
+        assertEquals("陈柯杰", reloaded.getRecognizedName());
+        assertEquals("/uploads/keep-me.jpg", reloaded.getImageUrl());
+    }
+
+    @Test
+    @Order(5)
+    @DisplayName("导出 — imageUrl 应按 publicBaseUrl 拼成绝对链接且无硬编码 8081")
+    void listAllForExport_shouldAbsolutizeImageUrl() {
+        AlertLog entity = new AlertLog();
+        entity.setDeviceId(testDeviceId);
+        entity.setProximityRatio(0.50);
+        entity.setDangerLevel(2);
+        entity.setStatus(0);
+        entity.setDeleted(0);
+        entity.setAuthStatus("UNAUTHORIZED");
+        entity.setImageUrl("/uploads/snap.jpg");
+        alertLogMapper.insert(entity);
+
+        List<AlertLogVO> exported = alertLogService.listAllForExport("https://door.example.com");
+        assertFalse(exported.isEmpty());
+        assertEquals("https://door.example.com/uploads/snap.jpg", exported.get(0).getImageUrl());
+        assertFalse(
+                exported.get(0).getImageUrl().contains("localhost:8081"),
+                "导出链接不应依赖硬编码 localhost:8081"
+        );
+    }
+
+    @Test
     @Order(6)
     @DisplayName("分页查询 — 应正确返回分页数据")
     void pageAlerts_shouldReturnPaginatedData() {

@@ -9,6 +9,7 @@ import jakarta.websocket.OnOpen;
 import jakarta.websocket.Session;
 import jakarta.websocket.server.ServerEndpoint;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
 
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -19,9 +20,11 @@ import java.util.concurrent.Executors;
  * 告警实时推送 WebSocket 服务端
  * <p>
  * 维护大屏客户端连接，在边缘端上报新告警后异步广播 JSON 数据。
+ * 需注册为 Spring Bean，{@link org.springframework.web.socket.server.standard.ServerEndpointExporter} 才会扫描到。
  * </p>
  */
 @Slf4j
+@Component
 @ServerEndpoint("/ws/alerts")
 public class AlertWebSocketServer {
 

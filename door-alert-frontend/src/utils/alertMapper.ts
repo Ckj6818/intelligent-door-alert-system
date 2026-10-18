@@ -1,5 +1,8 @@
 import type { Alert, AlertPayload, AuthStatus, LiveFeedItem } from '../types';
 
+/** 音频实现统一在 audioFeedback.ts，此处仅再导出供旧 import 路径兼容 */
+export { playThreatAlarm, playPassageChime } from './audioFeedback';
+
 export function resolveAuthStatus(raw: AlertPayload): AuthStatus | undefined {
   const status = (raw.authStatus || '').toString().toUpperCase();
   if (status === 'AUTHORIZED' || status === 'UNAUTHORIZED') {
@@ -46,6 +49,12 @@ export function mapToAlert(raw: AlertPayload): Alert {
   if (authStatus === 'AUTHORIZED') {
     type = `授权通行 · ${recognizedName || '已知人员'}`;
     typeBadge = 'success';
+  } else if ((raw.alertType || '').toUpperCase() === 'TAILGATING') {
+    type = '尾随闯入';
+    typeBadge = 'warning';
+  } else if ((raw.alertType || '').toUpperCase() === 'LOITERING') {
+    type = '遮挡徘徊';
+    typeBadge = 'tertiary';
   } else if (authStatus === 'UNAUTHORIZED' || alertLevel >= 3) {
     type = recognizedName
       ? `陌生人员入侵 · ${recognizedName}`
@@ -73,6 +82,7 @@ export function mapToAlert(raw: AlertPayload): Alert {
     recognizedName,
     areaRatio,
     alertLevel,
+    alertType: (raw.alertType || 'INTRUSION').toString().toUpperCase(),
   };
 }
 
@@ -91,49 +101,4 @@ export function mapToLiveFeed(alert: Alert): LiveFeedItem {
           ? 'person'
           : 'motion',
   };
-}
-
-/** 高危入侵蜂鸣（880Hz） */
-export function playThreatAlarm(): void {
-  try {
-    if (localStorage.getItem('sys_settings_alarm_sound') === 'false') return;
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-    osc.start();
-    setTimeout(() => {
-      osc.stop();
-      audioCtx.close();
-    }, 450);
-  } catch {
-    // ignore autoplay block
-  }
-}
-
-/** 授权通行轻提示音（柔和正弦） */
-export function playPassageChime(): void {
-  try {
-    if (localStorage.getItem('sys_settings_alarm_sound') === 'false') return;
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(660, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.03, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
-    osc.start();
-    setTimeout(() => {
-      osc.stop();
-      audioCtx.close();
-    }, 360);
-  } catch {
-    // ignore
-  }
 }

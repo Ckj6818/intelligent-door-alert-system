@@ -8,7 +8,7 @@ import {
   Terminal,
   CheckCircle2
 } from 'lucide-react';
-import { getDeviceList } from '@/api/index';
+import { getDeviceList, getEdgeConfig, saveEdgeConfig } from '@/api/index';
 
 interface SettingsTabProps {
   onThresholdChange?: (val: number) => void;
@@ -22,11 +22,42 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
   const [autoPurge, setAutoPurge] = useState<string>(() => localStorage.getItem('sys_settings_purge_policy') || '24h');
   const [encryptionStandard, setEncryptionStandard] = useState<string>(() => localStorage.getItem('sys_settings_encryption') || 'AES-256');
 
+  const [edgeDeviceId, setEdgeDeviceId] = useState<number>(1);
+  const [dangerDistanceM, setDangerDistanceM] = useState(1.5);
+  const [cooldownSec, setCooldownSec] = useState(10);
+  const [faceMatchThreshold, setFaceMatchThreshold] = useState(0.363);
+  const [tailgateEnabled, setTailgateEnabled] = useState(true);
+  const [savingEdge, setSavingEdge] = useState(false);
+
   // Diagnostic states
   const [isSelfTesting, setIsSelfTesting] = useState(false);
   const [lastSelfTestTime, setLastSelfTestTime] = useState<string>(() => localStorage.getItem('sys_last_health_check') || '尚未自检');
   const [realBackendLatency, setRealBackendLatency] = useState<number>(18);
   const [savedSuccessMsg, setSavedSuccessMsg] = useState('');
+
+  useEffect(() => {
+    getDeviceList({ current: 1, size: 1 })
+      .then((res: any) => {
+        const first = res?.records?.[0];
+        if (first?.id) {
+          setEdgeDeviceId(Number(first.id));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!edgeDeviceId) return;
+    getEdgeConfig(edgeDeviceId)
+      .then((cfg: any) => {
+        if (!cfg) return;
+        if (cfg.dangerDistanceM != null) setDangerDistanceM(Number(cfg.dangerDistanceM));
+        if (cfg.cooldownSec != null) setCooldownSec(Number(cfg.cooldownSec));
+        if (cfg.faceMatchThreshold != null) setFaceMatchThreshold(Number(cfg.faceMatchThreshold));
+        if (cfg.tailgateEnabled != null) setTailgateEnabled(Boolean(cfg.tailgateEnabled));
+      })
+      .catch(() => {});
+  }, [edgeDeviceId]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,8 +73,24 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
       onThresholdChange(threshold / 100);
     }
 
-    setSavedSuccessMsg(`系统参数已生效！YOLO模型: ${yoloModel}，置信度阈值: ${threshold}%，音频警告: ${alarmActive ? '开启' : '关闭'}`);
-    setTimeout(() => setSavedSuccessMsg(''), 4000);
+    setSavingEdge(true);
+    saveEdgeConfig(edgeDeviceId, {
+      dangerDistanceM,
+      cooldownSec,
+      faceMatchThreshold,
+      tailgateEnabled,
+    })
+      .then(() => {
+        setSavedSuccessMsg(
+          `边缘参数已下发至设备 #${edgeDeviceId}（危险距离 ${dangerDistanceM}m / 冷却 ${cooldownSec}s）。下次心跳即可热更新。`,
+        );
+        setTimeout(() => setSavedSuccessMsg(''), 4500);
+      })
+      .catch(() => {
+        setSavedSuccessMsg('本地参数已保存，但边缘配置下发失败，请检查后端与设备 ID。');
+        setTimeout(() => setSavedSuccessMsg(''), 4500);
+      })
+      .finally(() => setSavingEdge(false));
   };
 
   // Perform real health diagnostic call against Spring Boot backend
@@ -156,13 +203,83 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
               </label>
             </div>
 
+            <div className="pt-4 border-t border-outline-variant/10 space-y-4">
+              <div>
+                <h4 className="text-sm font-bold text-on-surface">边缘门禁算法热下发</h4>
+                <p className="text-[10px] text-on-surface-variant mt-1">
+                  写入设备 #{edgeDeviceId} 配置，边缘心跳响应携带 edgeConfig 后秒级生效。
+                </p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-on-surface-variant">
+                  <span>危险距离阈值 D_danger (m)</span>
+                  <span className="text-cyber-primary font-bold">{dangerDistanceM.toFixed(1)} m</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.8"
+                  max="3.0"
+                  step="0.1"
+                  value={dangerDistanceM}
+                  onChange={(e) => setDangerDistanceM(Number(e.target.value))}
+                  className="w-full accent-cyber-primary bg-cyber-surface-lowest h-1.5 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-on-surface-variant">
+                  <span>告警冷却防抖 (秒)</span>
+                  <span className="text-cyber-primary font-bold">{cooldownSec}s</span>
+                </div>
+                <input
+                  type="range"
+                  min="3"
+                  max="30"
+                  step="1"
+                  value={cooldownSec}
+                  onChange={(e) => setCooldownSec(Number(e.target.value))}
+                  className="w-full accent-cyber-primary bg-cyber-surface-lowest h-1.5 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-on-surface-variant">
+                  <span>人脸匹配阈值 (SFace 余弦)</span>
+                  <span className="text-cyber-primary font-bold">{faceMatchThreshold.toFixed(3)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.25"
+                  max="0.55"
+                  step="0.001"
+                  value={faceMatchThreshold}
+                  onChange={(e) => setFaceMatchThreshold(Number(e.target.value))}
+                  className="w-full accent-cyber-primary bg-cyber-surface-lowest h-1.5 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+              <div className="flex items-center justify-between p-3 rounded bg-cyber-surface-low/50 border border-outline-variant/15">
+                <div>
+                  <p className="text-xs text-on-surface font-bold">尾随检测</p>
+                  <p className="text-[10px] text-on-surface-variant">ROI 内授权+未授权同时出现时上报 TAILGATING</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={tailgateEnabled}
+                    onChange={(e) => setTailgateEnabled(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-cyber-surface-lowest rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-on-surface-variant after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyber-primary" />
+                </label>
+              </div>
+            </div>
+
             {/* Save trigger */}
             <div className="flex justify-end pt-4 border-t border-outline-variant/10 font-sans">
               <button
                 type="submit"
-                className="px-6 py-3 bg-cyber-primary text-cyber-bg font-bold rounded-lg text-xs hover:shadow-[0_0_15px_rgba(0,218,243,0.3)] transition-all active:scale-95 cursor-pointer font-sans"
+                disabled={savingEdge}
+                className="px-6 py-3 bg-cyber-primary text-cyber-bg font-bold rounded-lg text-xs hover:shadow-[0_0_15px_rgba(0,218,243,0.3)] transition-all active:scale-95 cursor-pointer font-sans disabled:opacity-60"
               >
-                应用系统设置并保存
+                {savingEdge ? '正在下发边缘参数…' : '应用系统设置并保存'}
               </button>
             </div>
           </form>
@@ -245,7 +362,7 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
               配置说明
             </div>
             <p className="text-xs text-on-surface-variant leading-relaxed">
-              系统参数配置保存在本地安全的配置上下文中。调整“置信度过滤阈值”与“声音报警开关”将直接改变入侵事件的处理与音频提示逻辑。
+              前端置信度与音频开关写入本机；危险距离、冷却、人脸阈值与尾随开关写入后端并经心跳下发边缘，无需重启检测进程。
             </p>
           </div>
         </div>

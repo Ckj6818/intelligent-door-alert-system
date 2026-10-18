@@ -36,6 +36,9 @@ public class AlertWsPayload {
     /** 事件类型：ALERT（待处理工单） / PASSAGE（通行日志） */
     private String eventType;
 
+    /** 告警子类型：INTRUSION / TAILGATING / LOITERING */
+    private String alertType;
+
     private Long deviceId;
 
     private Integer status;

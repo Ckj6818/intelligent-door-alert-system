@@ -31,9 +31,11 @@ public interface AlertLogService extends IService<AlertLog> {
     AlertWsPayload uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);
 
     /**
-     * 导出全部告警记录（需 alert:export 权限）
+     * 导出全部告警记录（需 alert:export 权限）。
+     *
+     * @param publicBaseUrl 外部可访问根地址，用于拼接 imageUrl 绝对链接；可为空
      */
-    List<AlertLogVO> listAllForExport();
+    List<AlertLogVO> listAllForExport(String publicBaseUrl);
 
     /**
      * 逻辑删除告警记录

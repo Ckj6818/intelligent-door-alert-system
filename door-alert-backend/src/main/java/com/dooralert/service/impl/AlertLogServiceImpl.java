@@ -9,6 +9,7 @@ import com.dooralert.entity.AlertLog;
 import com.dooralert.entity.PassageLog;
 import com.dooralert.mapper.AlertLogMapper;
 import com.dooralert.service.AlertLogService;
+import com.dooralert.service.DoorLockService;
 import com.dooralert.service.PassageLogService;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
@@ -33,6 +34,9 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Autowired
     private PassageLogService passageLogService;
+
+    @Autowired
+    private DoorLockService doorLockService;
 
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
@@ -110,6 +114,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         entity.setProximityRatio(dto.getProximityRatio());
         entity.setDangerLevel(dto.getDangerLevel() != null ? dto.getDangerLevel() : 2);
         entity.setAuthStatus(authStatus);
+        entity.setAlertType(normalizeAlertType(dto.getAlertType()));
         entity.setRecognizedName(recognizedName);
         entity.setImageUrl(imageUrl);
         entity.setStatus(0); // 待处理工单
@@ -130,6 +135,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
                 .imageUrl(entity.getImageUrl())
                 .timestamp(entity.getCreateTime())
                 .eventType("ALERT")
+                .alertType(entity.getAlertType())
                 .deviceId(entity.getDeviceId())
                 .status(entity.getStatus())
                 .build();
@@ -151,6 +157,18 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         }
 
         log.info("授权通行日志已记录: id={}, name={}", passage.getId(), recognizedName);
+
+        // 授权通行 → 联动门锁/电机自动开锁
+        try {
+            doorLockService.unlock(
+                    dto.getDeviceId(),
+                    DoorLockServiceImpl.SRC_AUTO_FACE,
+                    recognizedName,
+                    null
+            );
+        } catch (Exception e) {
+            log.warn("授权通行联动开锁失败 deviceId={}: {}", dto.getDeviceId(), e.getMessage());
+        }
 
         return AlertWsPayload.builder()
                 .alertId(passage.getId())
@@ -175,6 +193,17 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
             return AUTH_AUTHORIZED;
         }
         return AUTH_UNAUTHORIZED;
+    }
+
+    private String normalizeAlertType(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return "INTRUSION";
+        }
+        String upper = raw.trim().toUpperCase(Locale.ROOT);
+        if ("TAILGATING".equals(upper) || "LOITERING".equals(upper) || "INTRUSION".equals(upper)) {
+            return upper;
+        }
+        return "INTRUSION";
     }
 
     /**
@@ -226,12 +255,25 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     }
 
     @Override
-    public List<AlertLogVO> listAllForExport() {
+    public List<AlertLogVO> listAllForExport(String publicBaseUrl) {
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
         wrapper.eq(AlertLog::getDeleted, 0);
         wrapper.orderByDesc(AlertLog::getCreateTime);
-        return this.list(wrapper).stream().map(this::toVO).collect(Collectors.toList());
+        String base = StringUtils.hasText(publicBaseUrl)
+                ? publicBaseUrl.replaceAll("/+$", "")
+                : "";
+        return this.list(wrapper).stream().map(entity -> {
+            AlertLogVO vo = toVO(entity);
+            if (StringUtils.hasText(base) && StringUtils.hasText(vo.getImageUrl())
+                    && !vo.getImageUrl().startsWith("http")) {
+                String path = vo.getImageUrl().startsWith("/")
+                        ? vo.getImageUrl()
+                        : "/" + vo.getImageUrl();
+                vo.setImageUrl(base + path);
+            }
+            return vo;
+        }).collect(Collectors.toList());
     }
 
     private AlertLogVO toVO(AlertLog entity) {

@@ -15,7 +15,7 @@ import {
   Settings2
 } from 'lucide-react';
 import { NodeReport, SystemUser } from '../types';
-import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts } from '@/api/index';
+import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts, getPassageTodayStats, getPassagePage } from '@/api/index';
 import * as XLSX from 'xlsx';
 
 interface ReportsTabProps {
@@ -29,6 +29,23 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
     { nodeId: 'SEC-BETA-09', dataType: '生物特征识别波动', totalEvents: 42, criticality: 'HIGH', avgResponse: '0.4秒', lastAggregation: '2分钟前' },
     { nodeId: 'CAM-GRID-04', dataType: '画面运动分析', totalEvents: 8931, criticality: 'MED', avgResponse: '0.8秒', lastAggregation: '35秒前' }
   ]);
+  const [passageStats, setPassageStats] = useState({ passageCount: 0, unauthorizedAlertCount: 0 });
+  const [recentPassages, setRecentPassages] = useState<any[]>([]);
+
+  useEffect(() => {
+    getPassageTodayStats()
+      .then((res: any) => {
+        if (!res) return;
+        setPassageStats({
+          passageCount: Number(res.passageCount) || 0,
+          unauthorizedAlertCount: Number(res.unauthorizedAlertCount) || 0,
+        });
+      })
+      .catch(() => {});
+    getPassagePage({ current: 1, size: 8 })
+      .then((res: any) => setRecentPassages(res?.records || []))
+      .catch(() => {});
+  }, []);
 
   const handleExportSpreadsheet = async () => {
     try {
@@ -37,16 +54,19 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
         alert('No alert logs available for export.');
         return;
       }
-      const backendOrigin = `${window.location.protocol}//${window.location.hostname}:8081`;
       const rows = records.map((item: any) => {
-        const imgUrl = item.imageUrl 
-          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${backendOrigin}${item.imageUrl}`)
-          : '-';
+        const raw = item.imageUrl as string | undefined;
+        const imgUrl = !raw
+          ? '-'
+          : raw.startsWith('http')
+            ? raw
+            : `${window.location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`;
         return {
           '告警时间': new Date(item.createTime).toLocaleString(),
           '设备ID': item.deviceId,
           '接近度': item.proximityRatio != null ? `${(item.proximityRatio * 100).toFixed(1)}%` : '-',
           '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
+          '告警类型': item.alertType || 'INTRUSION',
           '图片链接': imgUrl,
           '状态': item.status === 1 ? '已处理' : '未处理'
         };
@@ -154,13 +174,19 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
       {/* Hero Stats Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 font-sans">
         <div className="glass-panel p-6 rounded-lg">
-          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">24小时事件总数</p>
+          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">今日授权放行</p>
           <div className="flex items-end justify-between">
-            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">142</h3>
-            <span className="text-cyber-secondary font-mono text-xs font-bold">+3.4%</span>
+            <h3 className="text-display-lg text-cyber-secondary font-bold tabular-nums">{passageStats.passageCount}</h3>
+            <span className="text-cyber-secondary font-mono text-xs font-bold">PASSAGE</span>
           </div>
         </div>
-
+        <div className="glass-panel p-6 rounded-lg">
+          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">今日未授权拦截</p>
+          <div className="flex items-end justify-between">
+            <h3 className="text-display-lg text-cyber-error font-bold tabular-nums">{passageStats.unauthorizedAlertCount}</h3>
+            <span className="text-cyber-error font-mono text-xs font-bold">ALERT</span>
+          </div>
+        </div>
         <div className="glass-panel p-6 rounded-lg">
           <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">当前活动会话</p>
           <div className="flex items-end justify-between">
@@ -183,6 +209,50 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
             <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">99.9%</h3>
             <ShieldCheck className="text-cyber-secondary w-7 h-7" />
           </div>
+        </div>
+      </div>
+
+      <div className="glass-panel p-5 rounded-lg font-sans">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-on-surface">最近授权通行记录</h3>
+          <span className="text-[10px] text-on-surface-variant font-mono">passage_log</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="text-on-surface-variant border-b border-outline-variant/20">
+              <tr>
+                <th className="py-2 pr-3">时间</th>
+                <th className="py-2 pr-3">姓名</th>
+                <th className="py-2 pr-3">设备</th>
+                <th className="py-2">接近度</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentPassages.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="py-4 text-on-surface-variant">暂无通行记录</td>
+                </tr>
+              ) : (
+                recentPassages
+                  .filter((p) =>
+                    !searchQuery ||
+                    String(p.recognizedName || '').toLowerCase().includes(searchQuery.toLowerCase()),
+                  )
+                  .map((p) => (
+                    <tr key={p.id} className="border-b border-outline-variant/10">
+                      <td className="py-2 pr-3 font-mono">
+                        {p.createTime ? new Date(p.createTime).toLocaleString() : '-'}
+                      </td>
+                      <td className="py-2 pr-3">{p.recognizedName || '-'}</td>
+                      <td className="py-2 pr-3">#{p.deviceId}</td>
+                      <td className="py-2 tabular-nums">
+                        {p.proximityRatio != null ? `${(p.proximityRatio * 100).toFixed(1)}%` : '-'}
+                      </td>
+                    </tr>
+                  ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

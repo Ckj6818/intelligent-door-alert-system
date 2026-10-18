@@ -25,6 +25,10 @@ public class SysDevice {
     @TableField("status")
     private Integer status;
 
+    /** 边缘算法参数 JSON（危险距离、冷却、人脸阈值、尾随开关） */
+    @TableField("edge_config")
+    private String edgeConfig;
+
     @TableField(value = "create_time", fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 }

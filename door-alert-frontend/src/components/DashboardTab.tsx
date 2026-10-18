@@ -16,10 +16,21 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { DeviceStatus, LiveFeedItem, Alert } from '../types';
-import { addDevice, updateDevice, deleteDevice, getDeviceList } from '@/api/index';
+import { addDevice, updateDevice, deleteDevice, getDeviceList, getPassageTodayStats } from '@/api/index';
 
-/** 边缘 AI YOLO 实时预览端口（与 doorAlert.py STREAM_PORT 一致） */
-const EDGE_STREAM_PORT = 8090;
+/**
+ * 边缘 YOLO MJPEG：默认同源代理 /video-stream（Vite/Nginx → :8090），
+ * 避免 HTTPS 页面直连 http://host:8090 触发 Mixed Content。
+ * 可用 VITE_EDGE_STREAM_URL 覆盖，例如 http://192.168.1.8:8090
+ */
+function resolveEdgeStreamUrls(): { video: string; health: string } {
+  const override = (import.meta.env.VITE_EDGE_STREAM_URL as string | undefined)?.trim();
+  if (override) {
+    const base = override.replace(/\/$/, '').replace(/\/video$/i, '');
+    return { video: `${base}/video`, health: `${base}/health` };
+  }
+  return { video: '/video-stream/video', health: '/video-stream/health' };
+}
 
 interface DashboardTabProps {
   searchQuery: string;
@@ -44,19 +55,22 @@ export default function DashboardTab({
   const [inferenceData, setInferenceData] = useState<{ x: number; y1: number; y2: number }[]>([]);
   const [streamOnline, setStreamOnline] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
+  const [compare, setCompare] = useState<{ passageCount: number; unauthorizedAlertCount: number; days: { date: string; passages: number; alerts: number }[] }>({
+    passageCount: 0,
+    unauthorizedAlertCount: 0,
+    days: [],
+  });
 
-  const streamUrl = useMemo(() => {
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    return `${window.location.protocol}//${host}:${EDGE_STREAM_PORT}/video`;
-  }, []);
+  const { video: streamUrl, health: streamHealthUrl } = useMemo(
+    () => resolveEdgeStreamUrls(),
+    [],
+  );
 
   // 探测边缘推流是否可用（不阻塞画面）
   useEffect(() => {
     let cancelled = false;
-    const host = window.location.hostname;
-    const healthUrl = `${window.location.protocol}//${host}:${EDGE_STREAM_PORT}/health`;
     const check = () => {
-      fetch(healthUrl, { method: 'GET', cache: 'no-store' })
+      fetch(streamHealthUrl, { method: 'GET', cache: 'no-store' })
         .then((r) => {
           if (!cancelled) setStreamOnline(r.ok);
         })
@@ -70,7 +84,20 @@ export default function DashboardTab({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [streamHealthUrl]);
+
+  useEffect(() => {
+    getPassageTodayStats()
+      .then((res: any) => {
+        if (!res) return;
+        setCompare({
+          passageCount: Number(res.passageCount) || 0,
+          unauthorizedAlertCount: Number(res.unauthorizedAlertCount) || 0,
+          days: Array.isArray(res.days) ? res.days : [],
+        });
+      })
+      .catch(() => {});
+  }, [alerts.length]);
 
   // Device management modal state
   const [showDeviceModal, setShowDeviceModal] = useState(false);
@@ -284,6 +311,70 @@ export default function DashboardTab({
           <div className="mt-2 text-on-surface-variant font-sans text-xs">
             {devices.some(d => d.status === 'offline') ? '检测到存在离线节点' : '未检测到严重外部威胁'}
           </div>
+        </div>
+      </div>
+
+      <div className="glass-panel p-5 rounded-lg">
+        <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+          <span className="text-label-caps text-on-surface-variant font-sans">今日授权放行 vs 未授权拦截</span>
+          <div className="flex items-center gap-3 text-[10px] font-mono text-on-surface-variant">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-sm bg-cyber-secondary/80" />
+              通行
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-sm bg-cyber-error/80" />
+              告警
+            </span>
+            <span>近 7 日</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <p className="text-[10px] text-on-surface-variant">授权通行</p>
+            <p className="text-3xl font-bold text-cyber-secondary tabular-nums">{compare.passageCount}</p>
+          </div>
+          <div>
+            <p className="text-[10px] text-on-surface-variant">未授权告警</p>
+            <p className="text-3xl font-bold text-cyber-error tabular-nums">{compare.unauthorizedAlertCount}</p>
+          </div>
+        </div>
+        <div className="flex items-end gap-1.5 h-24">
+          {(() => {
+            const max = Math.max(
+              1,
+              ...compare.days.map((d) => Math.max(d.passages || 0, d.alerts || 0)),
+            );
+            const barHeight = (value: number) => {
+              const pct = ((value || 0) / max) * 100;
+              // 零值保留底线，避免整列塌缩成空洞
+              return `max(2px, ${pct}%)`;
+            };
+            return compare.days.map((day) => {
+              const label = (day.date || '').slice(5); // MM-DD
+              return (
+                <div
+                  key={day.date}
+                  className="flex-1 flex flex-col items-center gap-1 min-w-0 h-full"
+                  title={`${day.date} · 通行 ${day.passages || 0} · 告警 ${day.alerts || 0}`}
+                >
+                  <div className="w-full flex-1 flex items-end justify-center gap-0.5 min-h-0">
+                    <div
+                      className="w-[42%] max-w-[14px] bg-cyber-secondary/80 rounded-t-sm"
+                      style={{ height: barHeight(day.passages || 0) }}
+                    />
+                    <div
+                      className="w-[42%] max-w-[14px] bg-cyber-error/80 rounded-t-sm"
+                      style={{ height: barHeight(day.alerts || 0) }}
+                    />
+                  </div>
+                  <span className="text-[9px] font-mono text-on-surface-variant/80 tabular-nums leading-none">
+                    {label || '--'}
+                  </span>
+                </div>
+              );
+            });
+          })()}
         </div>
       </div>
 

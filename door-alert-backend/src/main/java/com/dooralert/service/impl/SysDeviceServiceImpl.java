@@ -1,5 +1,6 @@
 package com.dooralert.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -7,12 +8,17 @@ import com.dooralert.dto.SysDeviceDTO;
 import com.dooralert.entity.SysDevice;
 import com.dooralert.mapper.SysDeviceMapper;
 import com.dooralert.service.SysDeviceService;
+import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 @Service
 public class SysDeviceServiceImpl extends ServiceImpl<SysDeviceMapper, SysDevice> implements SysDeviceService {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public IPage<SysDeviceVO> pageDevices(long current, long size) {
@@ -46,6 +52,48 @@ public class SysDeviceServiceImpl extends ServiceImpl<SysDeviceMapper, SysDevice
         entity.setLocation(dto.getLocation());
         entity.setId(id);
         return this.updateById(entity);
+    }
+
+    @Override
+    public EdgeConfigVO getEdgeConfig(Long deviceId) {
+        SysDevice entity = deviceId == null ? null : this.getById(deviceId);
+        if (entity == null || !StringUtils.hasText(entity.getEdgeConfig())) {
+            return new EdgeConfigVO();
+        }
+        try {
+            EdgeConfigVO parsed = objectMapper.readValue(entity.getEdgeConfig(), EdgeConfigVO.class);
+            return parsed == null ? new EdgeConfigVO() : parsed;
+        } catch (Exception e) {
+            return new EdgeConfigVO();
+        }
+    }
+
+    @Override
+    public boolean updateEdgeConfig(Long deviceId, EdgeConfigVO config) {
+        if (deviceId == null || this.getById(deviceId) == null) {
+            return false;
+        }
+        EdgeConfigVO safe = config == null ? new EdgeConfigVO() : config;
+        if (safe.getDangerDistanceM() == null) {
+            safe.setDangerDistanceM(1.5);
+        }
+        if (safe.getCooldownSec() == null) {
+            safe.setCooldownSec(10);
+        }
+        if (safe.getFaceMatchThreshold() == null) {
+            safe.setFaceMatchThreshold(0.363);
+        }
+        if (safe.getTailgateEnabled() == null) {
+            safe.setTailgateEnabled(true);
+        }
+        try {
+            String json = objectMapper.writeValueAsString(safe);
+            LambdaUpdateWrapper<SysDevice> wrapper = new LambdaUpdateWrapper<>();
+            wrapper.eq(SysDevice::getId, deviceId).set(SysDevice::getEdgeConfig, json);
+            return this.update(wrapper);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private SysDeviceVO toVO(SysDevice entity) {

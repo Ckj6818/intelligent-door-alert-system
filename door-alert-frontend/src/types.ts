@@ -22,6 +22,8 @@ export interface AlertPayload {
   timestamp?: string;
   createTime?: string;
   eventType?: 'ALERT' | 'PASSAGE' | string;
+  /** INTRUSION / TAILGATING / LOITERING */
+  alertType?: string;
   deviceId?: number | string;
   deviceName?: string;
   status?: number;
@@ -35,7 +37,7 @@ export interface Alert {
   date: string;
   device: string;
   type: 'Unidentified Person' | 'Known Personnel' | 'Unusual Activity' | string;
-  typeBadge: 'error' | 'primary' | 'tertiary' | 'success';
+  typeBadge: 'error' | 'primary' | 'tertiary' | 'success' | 'warning';
   imageSrc: string;
   status: 'Pending Review' | 'Auto-Cleared' | 'Investigating' | string;
   statusType: 'error' | 'success' | 'warning' | string;
@@ -45,6 +47,7 @@ export interface Alert {
   recognizedName?: string;
   areaRatio?: number;
   alertLevel?: number;
+  alertType?: string;
 }
 
 /** 授权通行右上角通知 */
@@ -71,6 +74,19 @@ export interface TrashItem {
   id: string;
   name: string;
   deletedTime: string;
+  /** 还原时必须保留，禁止写死为 UNAUTHORIZED */
+  authStatus?: AuthStatus | string;
+  recognizedName?: string;
+  type?: string;
+  typeBadge?: Alert['typeBadge'];
+  imageSrc?: string;
+  device?: string;
+  location?: string;
+  areaRatio?: number;
+  alertLevel?: number;
+  alertType?: string;
+  status?: Alert['status'];
+  statusType?: Alert['statusType'];
 }
 
 export interface NodeReport {

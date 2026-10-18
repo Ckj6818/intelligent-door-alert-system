@@ -37,6 +37,7 @@ CREATE TABLE `sys_device` (
     `device_name` VARCHAR(100) NOT NULL                COMMENT '设备名称',
     `location`    VARCHAR(200) DEFAULT NULL            COMMENT '设备安装位置',
     `status`      TINYINT      NOT NULL DEFAULT 0      COMMENT '设备状态（0-离线, 1-在线）',
+    `edge_config` TEXT         DEFAULT NULL            COMMENT '边缘算法参数 JSON',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='设备信息表';
@@ -52,6 +53,7 @@ CREATE TABLE `alert_log` (
     `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0      COMMENT '目标接近度（0~1 浮点数）',
     `danger_level`    INT           NOT NULL DEFAULT 0      COMMENT '危险等级（0-安全, 1-注意, 2-警告, 3-危险）',
     `auth_status`     VARCHAR(20)   DEFAULT NULL            COMMENT 'AUTHORIZED / UNAUTHORIZED',
+    `alert_type`      VARCHAR(20)   DEFAULT 'INTRUSION'     COMMENT 'INTRUSION / TAILGATING / LOITERING',
     `recognized_name` VARCHAR(100)  DEFAULT NULL            COMMENT '识别到的姓名',
     `status`          TINYINT       NOT NULL DEFAULT 0      COMMENT '处理状态（0-未处理/待处理工单, 1-已处理）',
     `create_time`     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

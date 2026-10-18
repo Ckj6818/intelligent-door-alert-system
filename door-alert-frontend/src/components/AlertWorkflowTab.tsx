@@ -11,9 +11,73 @@ import {
   Eye,
   Camera
 } from 'lucide-react';
-import { Alert, TrashItem, LiveFeedItem } from '../types';
+import { Alert, TrashItem, LiveFeedItem, AuthStatus } from '../types';
 import * as XLSX from 'xlsx';
 import { handleAlert, deleteAlert, restoreAlert, clearAllAlerts, exportAlerts, clearRecycleBinPermanently } from '@/api/index';
+
+/** 从告警行提取回收站快照（保留 authStatus 等字段） */
+function alertToTrashItem(al: Alert, deletedTime = '刚刚'): TrashItem {
+  return {
+    id: String(al.rawId ?? al.id.replace(/^AL-/, '')),
+    name: `${al.device}_告警日志_${al.id}`,
+    deletedTime,
+    authStatus: al.authStatus,
+    recognizedName: al.recognizedName,
+    type: al.type,
+    typeBadge: al.typeBadge,
+    imageSrc: al.imageSrc,
+    device: al.device,
+    location: al.location,
+    areaRatio: al.areaRatio,
+    alertLevel: al.alertLevel,
+    alertType: al.alertType,
+    status: al.status,
+    statusType: al.statusType,
+  };
+}
+
+/** 还原时按原 authStatus 重建告警行，禁止写死 UNAUTHORIZED */
+function trashItemToAlert(item: TrashItem): Alert {
+  const rawStatus = (item.authStatus || '').toString().toUpperCase();
+  const authStatus: AuthStatus | undefined =
+    rawStatus === 'AUTHORIZED' || rawStatus === 'UNAUTHORIZED'
+      ? (rawStatus as AuthStatus)
+      : undefined;
+
+  let type = item.type || '异常活动检测';
+  let typeBadge: Alert['typeBadge'] = item.typeBadge || 'tertiary';
+  if (!item.type) {
+    if (authStatus === 'AUTHORIZED') {
+      type = `授权通行 · ${item.recognizedName || '已知人员'}`;
+      typeBadge = 'success';
+    } else if (authStatus === 'UNAUTHORIZED') {
+      type = item.recognizedName
+        ? `陌生人员入侵 · ${item.recognizedName}`
+        : '陌生人员入侵';
+      typeBadge = 'error';
+    }
+  }
+
+  return {
+    id: 'AL-' + item.id,
+    rawId: item.id,
+    time: new Date().toLocaleTimeString(),
+    date: new Date().toISOString().split('T')[0],
+    device: item.device || item.name.replace(/_告警日志.*$/, '').replace(/_Alert.*$/i, ''),
+    type,
+    typeBadge,
+    imageSrc: item.imageSrc || '',
+    status: item.status || '待复核',
+    statusType: item.statusType || (authStatus === 'AUTHORIZED' ? 'success' : 'error'),
+    confidence: item.areaRatio ?? 0.9,
+    location: item.location || '已恢复防区',
+    authStatus,
+    recognizedName: item.recognizedName,
+    areaRatio: item.areaRatio,
+    alertLevel: item.alertLevel,
+    alertType: item.alertType,
+  };
+}
 
 interface AlertWorkflowTabProps {
   searchQuery: string;
@@ -66,11 +130,12 @@ export default function AlertWorkflowTab({
           
           const newTrashItems = selectedIds.map(id => {
             const row = alerts.find(al => al.id === id);
+            if (row) return alertToTrashItem(row);
             return {
               id: id.replace('AL-', ''),
-              name: row ? `${row.device}_告警日志_${row.id}` : `告警日志_${id}`,
-              deletedTime: '刚刚'
-            };
+              name: `告警日志_${id}`,
+              deletedTime: '刚刚',
+            } as TrashItem;
           });
           setTrashItems(prev => [...newTrashItems, ...prev]);
           setSelectedIds([]);
@@ -90,11 +155,14 @@ export default function AlertWorkflowTab({
         alert('No alert logs available for export.');
         return;
       }
-      const backendOrigin = `${window.location.protocol}//${window.location.hostname}:8081`;
+      // 后端 /export 已按 app.public-base-url 或请求头拼好绝对 URL；相对路径则同源拼接
       const rows = records.map((item: any) => {
-        const imgUrl = item.imageUrl 
-          ? (item.imageUrl.startsWith('http') ? item.imageUrl : `${backendOrigin}${item.imageUrl}`)
-          : '-';
+        const raw = item.imageUrl as string | undefined;
+        const imgUrl = !raw
+          ? '-'
+          : raw.startsWith('http')
+            ? raw
+            : `${window.location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`;
         return {
           '告警时间': new Date(item.createTime).toLocaleString(),
           '设备ID': item.deviceId,
@@ -139,15 +207,14 @@ export default function AlertWorkflowTab({
   // Soft delete alert -> moves to recycle bin
   const handleSoftDelete = (id: string, name: string) => {
     const rawId = id.replace('AL-', '');
+    const row = alerts.find(al => al.id === id);
     deleteAlert(rawId)
       .then(() => {
         setAlerts(prev => prev.filter(al => al.id !== id));
         setLiveFeed(prev => prev.filter(f => f.id !== 'F-' + rawId));
-        const newTrash: TrashItem = {
-          id: rawId,
-          name: name,
-          deletedTime: '刚刚'
-        };
+        const newTrash: TrashItem = row
+          ? { ...alertToTrashItem(row), name: name || alertToTrashItem(row).name }
+          : { id: rawId, name: name || `告警日志_${id}`, deletedTime: '刚刚' };
         setTrashItems(prev => [newTrash, ...prev]);
         alert(`告警记录 ${id} 已移至回收站（逻辑删除）。`);
       })
@@ -156,27 +223,12 @@ export default function AlertWorkflowTab({
       });
   };
 
-  // Restore trash item -> moves back to table
+  // Restore trash item -> moves back to table（保留原 authStatus）
   const handleRestoreTrash = (item: TrashItem) => {
     restoreAlert(item.id)
       .then(() => {
         setTrashItems(prev => prev.filter(t => t.id !== item.id));
-        const restoredAlert: Alert = {
-          id: 'AL-' + item.id,
-          rawId: item.id,
-          time: new Date().toLocaleTimeString(),
-          date: new Date().toISOString().split('T')[0],
-          device: item.name.replace('_Alert', '').replace(/_\d+$/, ''),
-          type: '陌生人员入侵',
-          typeBadge: 'error',
-          imageSrc: '',
-          status: '待复核',
-          statusType: 'error',
-          confidence: 0.92,
-          location: '已恢复防区',
-          authStatus: 'UNAUTHORIZED',
-        };
-        setAlerts(prev => [restoredAlert, ...prev]);
+        setAlerts(prev => [trashItemToAlert(item), ...prev]);
         alert(`告警轨迹记录 ${item.id} 恢复成功。`);
       })
       .catch(err => console.error(err));
@@ -186,11 +238,7 @@ export default function AlertWorkflowTab({
     if (alerts.length === 0) return;
     clearAllAlerts()
       .then(() => {
-        const deletedAlerts: TrashItem[] = alerts.map(al => ({
-          id: al.id.replace('AL-', ''),
-          name: `${al.device}_告警日志`,
-          deletedTime: '刚刚'
-        }));
+        const deletedAlerts: TrashItem[] = alerts.map(al => alertToTrashItem(al));
         setTrashItems(prev => [...deletedAlerts, ...prev]);
         setAlerts([]);
         setLiveFeed([]);
@@ -201,26 +249,13 @@ export default function AlertWorkflowTab({
 
   const handleRestoreAll = () => {
     if (trashItems.length === 0) return;
-    Promise.all(trashItems.map(item => restoreAlert(item.id)))
+    const snapshot = [...trashItems];
+    Promise.all(snapshot.map(item => restoreAlert(item.id)))
       .then(() => {
-        trashItems.forEach(item => {
-          const restored: Alert = {
-            id: 'AL-' + item.id,
-            rawId: item.id,
-            time: new Date().toLocaleTimeString(),
-            date: new Date().toISOString().split('T')[0],
-            device: item.name.replace('_Alert', '').replace(/_\d+$/, ''),
-            type: '陌生人员入侵',
-            typeBadge: 'error',
-            imageSrc: '',
-            status: '待复核',
-            statusType: 'error',
-            confidence: 0.91,
-            location: '已恢复防区',
-            authStatus: 'UNAUTHORIZED',
-          };
-          setAlerts(prev => [restored, ...prev]);
-        });
+        setAlerts(prev => [
+          ...snapshot.map(trashItemToAlert),
+          ...prev,
+        ]);
         setTrashItems([]);
         alert('回收站中的所有逻辑记录已恢复至告警工作流表格。');
       })

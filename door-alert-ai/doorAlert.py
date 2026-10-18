@@ -2,9 +2,9 @@
 Intelligent Door Alert — 边缘 AI 视觉检测节点
 
 流水线：
-  摄像头/视频帧 → YOLOv8m 行人检测 → 面积占比 R 门控
-  →（R >= 0.2）人脸 ROI 特征提取与授权比对
-  → UNAUTHORIZED：10s 冷却防抖告警上报
+  摄像头/视频帧 → YOLOv8n(+ByteTrack) 行人跟踪 → 综合接近度门控
+  → YuNet/SFace 身份识别（姿态/清晰度过滤 + track 投票锁定）
+  → UNAUTHORIZED：多帧确认后告警上报
   → AUTHORIZED：通行日志上报（不上报告警工单）
 """
 
@@ -13,9 +13,12 @@ import os
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 import base64
+import glob
+import io
+import json
+import math
 import cv2
 import time
-import uuid
 import threading
 import traceback
 from datetime import datetime
@@ -30,30 +33,83 @@ try:
 except ImportError:  # pragma: no cover
     Image = ImageDraw = ImageFont = None
 
-# OpenCV 默认字体不支持中文，用系统字体绘制
+# 跨平台中文字体候选（Windows / Linux / macOS / Docker）
 _CN_FONT_PATHS = (
+    # Windows
     r"C:\Windows\Fonts\msyh.ttc",
+    r"C:\Windows\Fonts\msyhbd.ttc",
     r"C:\Windows\Fonts\simhei.ttf",
     r"C:\Windows\Fonts\simsun.ttc",
+    # Linux / Docker（Noto / 文泉驿）
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/noto/NotoSansSC-Regular.otf",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/arphic/uming.ttc",
+    # macOS
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/Library/Fonts/Arial Unicode.ttf",
 )
 _cn_font_cache = {}
+_cn_font_resolved_path = None
+
+
+def _iter_cn_font_paths():
+    """环境变量覆盖 + 内置回退链。"""
+    env_path = os.environ.get("CN_FONT_PATH", "").strip()
+    if env_path:
+        yield env_path
+    for path in _CN_FONT_PATHS:
+        yield path
+    # 额外扫描常见目录（避免发行版路径差异）
+    scan_dirs = (
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        os.path.expanduser("~/.fonts"),
+        os.path.expanduser("~/Library/Fonts"),
+    )
+    keywords = ("noto", "cjk", "wqy", "uming", "hei", "song", "pingfang", "msyh")
+    for root in scan_dirs:
+        if not os.path.isdir(root):
+            continue
+        try:
+            for dirpath, _, filenames in os.walk(root):
+                for name in filenames:
+                    lower = name.lower()
+                    if not lower.endswith((".ttf", ".ttc", ".otf")):
+                        continue
+                    if any(k in lower for k in keywords):
+                        yield os.path.join(dirpath, name)
+        except OSError:
+            continue
 
 
 def _resolve_cn_font(size=22):
+    global _cn_font_resolved_path
     if ImageFont is None:
         return None
     key = int(size)
     if key in _cn_font_cache:
         return _cn_font_cache[key]
-    for path in _CN_FONT_PATHS:
-        if os.path.isfile(path):
-            try:
-                font = ImageFont.truetype(path, key)
-                _cn_font_cache[key] = font
-                return font
-            except OSError:
-                continue
+    for path in _iter_cn_font_paths():
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, key)
+            _cn_font_cache[key] = font
+            if _cn_font_resolved_path != path:
+                _cn_font_resolved_path = path
+                print(f"[INFO] 中文字体: {path}")
+            return font
+        except OSError:
+            continue
     _cn_font_cache[key] = None
+    if _cn_font_resolved_path is None:
+        print("[WARN] 未找到中文字体，画面中文可能无法显示（可设 CN_FONT_PATH）")
+        _cn_font_resolved_path = ""
     return None
 
 
@@ -136,11 +192,25 @@ _stream_lock = threading.Lock()
 _stream_jpeg = None  # 最新一帧 JPEG bytes，供 MJPEG 推送
 
 # ================= 人脸识别 / 接近度门控 =================
-# face_recognition 默认约 0.6；略严一点减少误授权
 FACE_DISTANCE_THRESHOLD = float(os.environ.get("FACE_DISTANCE_THRESHOLD", "0.55"))
 AUTHORIZED_FACES_DIR = os.environ.get("AUTHORIZED_FACES_DIR", "authorized_faces")
-# 面积占比阈值：低于此值不做人脸推理、不触发告警
-PROXIMITY_ALERT_THRESHOLD = float(os.environ.get("PROXIMITY_ALERT_THRESHOLD", "0.22"))
+# 综合接近度阈值：低于此值不做人脸推理、不触发告警
+PROXIMITY_ALERT_THRESHOLD = float(os.environ.get("PROXIMITY_ALERT_THRESHOLD", "0.35"))
+# 接近度融合权重：面积占比 / 接地点垂直位置 / (1-透视距离因子)
+PROX_W_AREA = float(os.environ.get("PROX_W_AREA", "0.35"))
+PROX_W_Y = float(os.environ.get("PROX_W_Y", "0.40"))
+PROX_W_D = float(os.environ.get("PROX_W_D", "0.25"))
+# ROI 警戒区：相对帧宽高的归一化矩形 x1,y1,x2,y2（脚点落在区内才告警/识别）
+# 默认几乎全图；例如 "0.15,0.35,0.85,1.0" 表示画面下方门前区域
+_ROI_RAW = os.environ.get("ALERT_ROI_NORM", "0.0,0.25,1.0,1.0").strip()
+USE_BYTETRACK = os.environ.get("USE_BYTETRACK", "1").strip() in ("1", "true", "yes")
+# 人脸质量：最小边长(px)、Laplacian 清晰度下限、姿态对称度上限（越小越正脸）
+FACE_MIN_SIDE = int(os.environ.get("FACE_MIN_SIDE", "48"))
+FACE_MIN_SHARPNESS = float(os.environ.get("FACE_MIN_SHARPNESS", "35.0"))
+FACE_MAX_YAW_ASYM = float(os.environ.get("FACE_MAX_YAW_ASYM", "0.28"))
+# track 投票窗口长度；授权锁定后保持身份
+TRACK_VOTE_WINDOW = int(os.environ.get("TRACK_VOTE_WINDOW", "5"))
+TRACK_LOCK_AUTH = os.environ.get("TRACK_LOCK_AUTH", "1").strip() in ("1", "true", "yes")
 # 人脸比对最小间隔（秒）
 FACE_CHECK_INTERVAL = float(os.environ.get("FACE_CHECK_INTERVAL", "0.12"))
 # 识别结果缓存时长（秒）：命中后复用
@@ -182,11 +252,342 @@ AUTH_STATUS_AUTHORIZED = "AUTHORIZED"
 AUTH_STATUS_UNAUTHORIZED = "UNAUTHORIZED"
 UNAUTHORIZED_DISPLAY_NAME = "未授权人员/陌生人"
 
+# 白名单原子引用（热加载时整表替换，禁止 clear+extend 竞态）
+_face_bank_lock = threading.Lock()
+_face_bank = {"encodings": [], "names": []}
+
+# ByteTrack 轨迹元数据：track_id -> 首次出现/滞留/身份投票
+_track_lock = threading.Lock()
+_track_meta = {}
+
 # ================= 时间窗防抖（存储与算力流控） =================
-COOL_DOWN_INTERVAL = 10  # 秒：未授权告警冷却
+COOL_DOWN_INTERVAL = 10  # 秒：未授权告警冷却（可被心跳热更新）
 PASSAGE_LOG_INTERVAL = 10  # 秒：授权通行日志节流
 last_alert_time = 0.0
 last_passage_log_time = 0.0
+_alert_cooldown = {}
+
+# 估算距离 D_est（无标定，系数可调；保留 proximity 作为告警门控）
+DIST_K1 = float(os.environ.get("DIST_K1", "1.15"))
+DIST_K2 = float(os.environ.get("DIST_K2", "2.40"))
+DIST_DANGER_M = float(os.environ.get("DIST_DANGER_M", "1.5"))
+DIST_WARNING_M = float(os.environ.get("DIST_WARNING_M", "3.0"))
+TRACK_HISTORY_LEN = 30
+LOITER_SECONDS = float(os.environ.get("LOITER_SECONDS", "5"))
+TAILGATE_ENABLE = os.environ.get("TAILGATE_ENABLE", "1").strip() in ("1", "true", "yes")
+TAILGATE_CLOSE_PX = float(os.environ.get("TAILGATE_CLOSE_PX", "180"))
+CLAHE_LUMINANCE = float(os.environ.get("CLAHE_LUMINANCE", "70"))
+_ROI_POLY_RAW = os.environ.get("ALERT_ROI_POLYGON", "").strip()
+
+ALERT_TYPE_INTRUSION = "INTRUSION"
+ALERT_TYPE_TAILGATING = "TAILGATING"
+ALERT_TYPE_LOITERING = "LOITERING"
+
+OFFLINE_CACHE_DIR = os.environ.get(
+    "OFFLINE_CACHE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "offline_cache")
+)
+OFFLINE_MAX_ITEMS = int(os.environ.get("OFFLINE_MAX_ITEMS", "100"))
+OFFLINE_MAX_BYTES = int(os.environ.get("OFFLINE_MAX_BYTES", str(50 * 1024 * 1024)))
+
+_clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+_low_light = {"active": False, "checked_at": 0.0, "mean": 255.0}
+_offline_lock = threading.Lock()
+
+
+def _parse_roi_norm(raw):
+    try:
+        parts = [float(x.strip()) for x in raw.split(",")]
+        if len(parts) != 4:
+            raise ValueError("need 4 floats")
+        x1, y1, x2, y2 = parts
+        x1, y1 = max(0.0, min(1.0, x1)), max(0.0, min(1.0, y1))
+        x2, y2 = max(0.0, min(1.0, x2)), max(0.0, min(1.0, y2))
+        if x2 <= x1 or y2 <= y1:
+            raise ValueError("invalid box")
+        return (x1, y1, x2, y2)
+    except Exception:
+        return (0.0, 0.25, 1.0, 1.0)
+
+
+ALERT_ROI_NORM = _parse_roi_norm(_ROI_RAW)
+
+
+def _parse_roi_polygon(raw):
+    """归一化多边形 'x,y;x,y;...'，至少 3 点；否则返回 None，回退矩形 ROI。"""
+    if not raw:
+        return None
+    pts = []
+    for part in raw.split(";"):
+        xy = part.split(",")
+        if len(xy) != 2:
+            continue
+        try:
+            pts.append((float(xy[0].strip()), float(xy[1].strip())))
+        except ValueError:
+            continue
+    return pts if len(pts) >= 3 else None
+
+
+ALERT_ROI_POLYGON = _parse_roi_polygon(_ROI_POLY_RAW)
+
+
+def get_face_bank():
+    """返回当前白名单快照（list 引用在锁内读取）。"""
+    with _face_bank_lock:
+        return _face_bank["encodings"], _face_bank["names"]
+
+
+def set_face_bank(encodings, names):
+    """原子替换白名单引用，避免热加载清空瞬间后台读到空表。"""
+    with _face_bank_lock:
+        _face_bank["encodings"] = list(encodings)
+        _face_bank["names"] = list(names)
+
+
+def compute_proximity(x1, y1, x2, y2, frame_h, frame_w):
+    """
+    综合接近度：
+      area_ratio = Area(bbox)/Area(frame)
+      y_norm     = y2 / Y_max          （脚点越靠下越大）
+      d_factor    = (Y_max - y2)/Y_max （透视距离因子，越小越近）
+      proximity  = w_a*area + w_y*y_norm + w_d*(1-d_factor)
+    返回: proximity, area_ratio, d_factor, y_norm, in_roi
+    """
+    fh = float(max(1, frame_h))
+    fw = float(max(1, frame_w))
+    bb_area = max(0.0, float(x2 - x1) * float(y2 - y1))
+    area_ratio = bb_area / (fh * fw + 1e-5)
+    y_norm = float(y2) / (fh + 1e-5)
+    d_factor = (fh - float(y2)) / (fh + 1e-5)
+    proximity = (
+        PROX_W_AREA * area_ratio
+        + PROX_W_Y * y_norm
+        + PROX_W_D * (1.0 - d_factor)
+    )
+    # 脚点是否落在 ROI 警戒区（多边形优先，否则矩形）
+    foot_x = (float(x1) + float(x2)) * 0.5 / (fw + 1e-5)
+    foot_y = float(y2) / (fh + 1e-5)
+    in_roi = _foot_in_roi(foot_x, foot_y, fw, fh)
+    return float(proximity), float(area_ratio), float(d_factor), float(y_norm), bool(in_roi)
+
+
+def _foot_in_roi(foot_x_norm, foot_y_norm, frame_w, frame_h):
+    if ALERT_ROI_POLYGON:
+        poly = np.array(
+            [[p[0] * frame_w, p[1] * frame_h] for p in ALERT_ROI_POLYGON],
+            dtype=np.float32,
+        )
+        px = float(foot_x_norm) * float(frame_w)
+        py = float(foot_y_norm) * float(frame_h)
+        return cv2.pointPolygonTest(poly, (px, py), False) >= 0
+    rx1, ry1, rx2, ry2 = ALERT_ROI_NORM
+    return (rx1 <= foot_x_norm <= rx2) and (ry1 <= foot_y_norm <= ry2)
+
+
+def estimate_distance_m(y1, y2, frame_h):
+    """
+    无标定估算距离（米）。
+    d_factor = (Ymax - y2) / (h + eps)
+    D_est = K1 * ln(1 + d_factor) + K2 * ((Ymax - y2) / Ymax)^2
+    """
+    fh = float(max(1, frame_h))
+    h_box = max(1.0, float(y2) - float(y1))
+    d_factor_h = (fh - float(y2)) / (h_box + 1e-5)
+    y_term = max(0.0, (fh - float(y2)) / fh)
+    d_est = DIST_K1 * math.log(1.0 + max(0.0, d_factor_h)) + DIST_K2 * (y_term ** 2)
+    return float(max(0.05, d_est)), float(d_factor_h)
+
+
+def distance_band(d_est):
+    if d_est <= DIST_DANGER_M:
+        return "DANGER"
+    if d_est <= DIST_WARNING_M:
+        return "WARNING"
+    return "NORMAL"
+
+
+def _motion_from_history(hist):
+    """脚点序列：靠近 / 远离 / 横向路过。"""
+    if not hist or len(hist) < 6:
+        return "Unknown"
+    x0, y0, d0, _t0 = hist[0]
+    x1, y1, d1, _t1 = hist[-1]
+    dy = y1 - y0
+    dx = abs(x1 - x0)
+    if d1 + 0.12 < d0 and dy > 4:
+        return "Approaching"
+    if d1 > d0 + 0.12:
+        if dx > 28:
+            return "Passing"
+        return "Leaving"
+    if dx > 36 and abs(dy) < 18:
+        return "Passing"
+    return "Unknown"
+
+
+def _update_track_meta(track_id, now, *, foot_xy=None, d_est=None, in_roi=False):
+    """维护轨迹、ROI 滞留时长与最近 30 个脚点。"""
+    if track_id is None:
+        return 0.0, "Unknown"
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        if meta is None:
+            meta = {
+                "first_seen": now,
+                "last_seen": now,
+                "votes": [],
+                "locked": False,
+                "locked_status": None,
+                "locked_name": "",
+                "face_distance": None,
+                "face_similarity": None,
+                "history": [],
+                "motion": "Unknown",
+                "quality_face": False,
+                "roi_enter": None,
+            }
+            _track_meta[track_id] = meta
+        else:
+            meta["last_seen"] = now
+        if foot_xy is not None:
+            hist = meta.setdefault("history", [])
+            hist.append((float(foot_xy[0]), float(foot_xy[1]), float(d_est or 0.0), now))
+            if len(hist) > TRACK_HISTORY_LEN:
+                del hist[:-TRACK_HISTORY_LEN]
+            meta["motion"] = _motion_from_history(hist)
+        if in_roi:
+            if meta.get("roi_enter") is None:
+                meta["roi_enter"] = now
+            dwell = max(0.0, now - meta["roi_enter"])
+        else:
+            meta["roi_enter"] = None
+            dwell = 0.0
+        stale = [
+            tid for tid, m in _track_meta.items()
+            if now - m.get("last_seen", 0) > 30.0
+        ]
+        for tid in stale:
+            _track_meta.pop(tid, None)
+        if track_id not in _track_meta:
+            return dwell, "Unknown"
+        return dwell, _track_meta[track_id].get("motion", "Unknown")
+
+
+def _mark_quality_face(track_id):
+    if track_id is None:
+        return
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        if meta is not None:
+            meta["quality_face"] = True
+
+
+def _track_quality_face(track_id):
+    if track_id is None:
+        return False
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        return bool(meta and meta.get("quality_face"))
+
+
+def _track_apply_vote(track_id, result):
+    """
+    将单次识别结果写入 track 滑动窗口；授权可锁定。
+    返回用于展示/上报的稳定状态 dict 或 None。
+    """
+    if track_id is None or not result or not result.get("face_found"):
+        return None
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        if meta is None:
+            return None
+        if result.get("face_found") and not result.get("quality_reject"):
+            meta["quality_face"] = True
+        if meta.get("locked") and TRACK_LOCK_AUTH:
+            return {
+                "auth_status": meta.get("locked_status"),
+                "recognized_name": meta.get("locked_name", ""),
+                "face_distance": meta.get("face_distance"),
+                "face_similarity": meta.get("face_similarity"),
+                "face_found": True,
+                "from_track_lock": True,
+            }
+        # 质量拒绝帧：不进投票、不累加未授权
+        if result.get("quality_reject"):
+            return {
+                "auth_status": None,
+                "recognized_name": "",
+                "face_distance": result.get("face_distance"),
+                "face_similarity": result.get("face_similarity"),
+                "face_found": True,
+                "quality_reject": True,
+            }
+        status = result.get("auth_status")
+        meta["votes"].append(
+            {
+                "auth_status": status,
+                "recognized_name": result.get("recognized_name", ""),
+                "face_distance": result.get("face_distance"),
+                "face_similarity": result.get("face_similarity"),
+            }
+        )
+        if len(meta["votes"]) > TRACK_VOTE_WINDOW:
+            meta["votes"] = meta["votes"][-TRACK_VOTE_WINDOW:]
+        votes = meta["votes"]
+        auth_votes = [v for v in votes if v["auth_status"] == AUTH_STATUS_AUTHORIZED]
+        unauth_votes = [v for v in votes if v["auth_status"] == AUTH_STATUS_UNAUTHORIZED]
+        if auth_votes:
+            best = max(
+                auth_votes,
+                key=lambda v: (v.get("face_similarity") is not None, v.get("face_similarity") or 0),
+            )
+            if TRACK_LOCK_AUTH and len(auth_votes) >= max(1, AUTH_CONFIRM_FRAMES):
+                meta["locked"] = True
+                meta["locked_status"] = AUTH_STATUS_AUTHORIZED
+                meta["locked_name"] = best.get("recognized_name", "")
+                meta["face_distance"] = best.get("face_distance")
+                meta["face_similarity"] = best.get("face_similarity")
+            return {
+                "auth_status": AUTH_STATUS_AUTHORIZED,
+                "recognized_name": best.get("recognized_name", ""),
+                "face_distance": best.get("face_distance"),
+                "face_similarity": best.get("face_similarity"),
+                "face_found": True,
+            }
+        if len(unauth_votes) >= UNAUTH_CONFIRM_FRAMES:
+            return {
+                "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                "recognized_name": UNAUTHORIZED_DISPLAY_NAME,
+                "face_distance": unauth_votes[-1].get("face_distance"),
+                "face_similarity": unauth_votes[-1].get("face_similarity"),
+                "face_found": True,
+            }
+        # 仍在投票中
+        return {
+            "auth_status": None,
+            "recognized_name": "",
+            "face_distance": result.get("face_distance"),
+            "face_similarity": result.get("face_similarity"),
+            "face_found": True,
+        }
+
+
+def _track_locked_identity(track_id):
+    if track_id is None:
+        return None
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        if not meta or not meta.get("locked"):
+            return None
+        return {
+            "auth_status": meta.get("locked_status"),
+            "recognized_name": meta.get("locked_name", ""),
+            "face_distance": meta.get("face_distance"),
+            "face_similarity": meta.get("face_similarity"),
+            "face_found": True,
+            "from_track_lock": True,
+            "from_confirmed_cache": True,
+        }
 
 # 人脸识别缓存 / 异步调度（线程间共享）
 _face_cache_lock = threading.Lock()
@@ -297,12 +698,8 @@ def _encoding_from_bgr(bgr, face_recognition=None):
 
 def load_authorized_faces(folder=None):
     """
-    系统启动时扫描 authorized_faces/，提取每人一张照片的特征向量。
-
-    文件名（不含扩展名）作为已知用户姓名，例如「陈柯杰.jpg」→ 「陈柯杰」。
-    返回:
-        known_encodings (list[np.ndarray]): 特征向量列表
-        known_names (list[str]): 与编码一一对应的姓名列表
+    扫描 authorized_faces/：每人原图 + 水平翻转双模板特征。
+    比对时对同人多个模板取最大相似度。
     """
     if folder is None:
         folder = AUTHORIZED_FACES_DIR
@@ -335,7 +732,8 @@ def load_authorized_faces(folder=None):
         print(f"[WARN] 授权人脸目录 {folder} 中没有图片，人脸对比将不可用")
         return known_encodings, known_names
 
-    print(f"[INFO] 正在加载授权人脸库（共 {len(files)} 张照片）...")
+    print(f"[INFO] 正在加载授权人脸库（共 {len(files)} 张照片，含水平翻转模板）...")
+    people = 0
     for file in files:
         filepath = os.path.join(folder, file)
         try:
@@ -343,29 +741,37 @@ def load_authorized_faces(folder=None):
             if bgr is None:
                 print(f"  ✗ 无法读取: {file}")
                 continue
-            encoding = _encoding_from_bgr(bgr, face_recognition)
-            if encoding is None and engine == "dlib" and face_recognition is not None:
-                rgb = face_recognition.load_image_file(filepath)
-                encs = face_recognition.face_encodings(rgb)
-                encoding = encs[0] if encs else None
-            if encoding is not None:
-                known_encodings.append(encoding)
-                name = os.path.splitext(file)[0]
-                known_names.append(name)
-                print(f"  ✓ 已加载: {name}")
+            name = os.path.splitext(file)[0]
+            templates = []
+            for tag, img in (("原图", bgr), ("翻转", cv2.flip(bgr, 1))):
+                encoding = _encoding_from_bgr(img, face_recognition)
+                if encoding is None and engine == "dlib" and face_recognition is not None:
+                    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    encs = face_recognition.face_encodings(rgb)
+                    encoding = encs[0] if encs else None
+                if encoding is not None:
+                    templates.append(encoding)
+            if templates:
+                for enc in templates:
+                    known_encodings.append(enc)
+                    known_names.append(name)
+                people += 1
+                print(f"  ✓ 已加载: {name}（{len(templates)} 模板）")
             else:
                 print(f"  ✗ 未检测到人脸: {file}（请更换清晰正脸照片）")
         except Exception as exc:
             print(f"  ✗ 加载失败: {file} -> {exc}")
 
-    print(f"[INFO] 授权人脸库加载完成，共 {len(known_encodings)} 人")
+    print(
+        f"[INFO] 授权人脸库加载完成，共 {people} 人 / {len(known_encodings)} 条模板特征"
+    )
     return known_encodings, known_names
 
 
-def maybe_hot_reload_faces(known_encodings, known_names, state):
+def maybe_hot_reload_faces(state):
     """
-    检测 authorized_faces/.reload 标记（后端新增人员时写入），原地热加载人脸库。
-    state: dict，需包含键 last_reload_mtime
+    检测 authorized_faces/.reload，构建新白名单后原子替换全局引用。
+    禁止对旧 list 执行 clear()+extend()，避免后台线程读到空表。
     """
     reload_flag = os.path.join(AUTHORIZED_FACES_DIR, ".reload")
     if not os.path.isfile(reload_flag):
@@ -375,14 +781,12 @@ def maybe_hot_reload_faces(known_encodings, known_names, state):
         if mtime <= state.get("last_reload_mtime", 0):
             return
         enc, names = load_authorized_faces()
-        known_encodings.clear()
-        known_encodings.extend(enc)
-        known_names.clear()
-        known_names.extend(names)
+        set_face_bank(enc, names)
         state["last_reload_mtime"] = mtime
+        uniq = sorted(set(names))
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"[INFO] 人脸库热加载完成，当前授权人员 {len(known_names)} 人: {known_names}"
+            f"[INFO] 人脸库热加载完成，当前授权人员 {len(uniq)} 人: {uniq}"
         )
     except Exception as exc:
         print(f"[WARN] 人脸库热加载失败: {exc}")
@@ -478,12 +882,18 @@ def _raw_face_hit(cx, cy, now):
 
 
 def _apply_cache_to_detections(detections):
-    """主循环立刻套用后台识别结果，不必等下一轮 YOLO。"""
+    """主循环立刻套用后台识别结果 / track 锁定身份，不必等下一轮 YOLO。"""
     if not detections:
         return
     now = time.time()
     for det in detections:
-        if det.get("area_ratio", 0) < PROXIMITY_ALERT_THRESHOLD:
+        prox = det.get("proximity_ratio", det.get("area_ratio", 0))
+        if prox < PROXIMITY_ALERT_THRESHOLD or not det.get("in_roi", True):
+            continue
+        locked = _track_locked_identity(det.get("track_id"))
+        if locked is not None:
+            _apply_identity_to_det(det, locked)
+            det["danger_level"] = 0
             continue
         if det.get("auth_status") in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
             continue
@@ -503,7 +913,7 @@ def _apply_cache_to_detections(detections):
         if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
             det["danger_level"] = 0
         elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
-            det["danger_level"] = 3 if det["area_ratio"] >= 0.3 else 2
+            det["danger_level"] = 3 if prox >= 0.45 else 2
 
 
 def _confirm_same_target(cx, cy):
@@ -523,6 +933,7 @@ def _note_face_sample(cx, cy, result):
     """
     仅在每次新的识别结果上累计 streak（由人脸线程调用）。
     禁止主循环对同一结果反复 +1。
+    质量拒绝帧：打断未授权累计，不记为陌生人。
     """
     if not result or not result.get("face_found"):
         return
@@ -533,6 +944,9 @@ def _note_face_sample(cx, cy, result):
         if sample_ts <= _confirm_state["last_sample_ts"]:
             return
         _confirm_state["last_sample_ts"] = sample_ts
+        if result.get("quality_reject"):
+            _confirm_state["unauth_streak"] = 0
+            return
         if auth == AUTH_STATUS_AUTHORIZED:
             sim = result.get("face_similarity")
             strong = (
@@ -562,8 +976,13 @@ def stabilize_auth_for_action(det):
     auth = det.get("auth_status")
     cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
 
+    locked = _track_locked_identity(det.get("track_id"))
+    if locked is not None:
+        _apply_identity_to_det(det, locked)
+        return locked.get("auth_status")
+
     # 已写入长期缓存的结论：直接信任（已授权 / 已确认未授权）
-    if det.get("from_confirmed_cache"):
+    if det.get("from_confirmed_cache") or det.get("from_track_lock"):
         return auth
 
     if auth == AUTH_STATUS_AUTHORIZED:
@@ -641,6 +1060,7 @@ def _crop_face_roi(frame_bgr, x1, y1, x2, y2):
     roi = frame_bgr[y1c:y2_face, x1f:x2f]
     if roi is None or roi.size == 0:
         return None
+    roi = _enhance_face_roi(roi)
 
     rh, rw = roi.shape[:2]
     max_side = max(rh, rw)
@@ -717,6 +1137,52 @@ def _yunet_best_face_row(bgr_roi):
     return max(faces, key=lambda f: float(f[-1]))
 
 
+def _assess_face_quality(bgr_roi, face_row):
+    """
+    YuNet 5 点姿态对称度 + 最小尺寸 + Laplacian 清晰度。
+    返回 (ok, reason)；不通过时调用方保持「识别中」，不累加未授权。
+    face_row: x,y,w,h, re,le,nose,rcm,lcm, score
+    """
+    if face_row is None or bgr_roi is None or bgr_roi.size == 0:
+        return False, "noface"
+    x, y, fw, fh = map(float, face_row[:4])
+    if min(fw, fh) < float(FACE_MIN_SIDE):
+        return False, "small"
+    try:
+        re_x, re_y = float(face_row[4]), float(face_row[5])
+        le_x, le_y = float(face_row[6]), float(face_row[7])
+        nt_x, nt_y = float(face_row[8]), float(face_row[9])
+        rcm_x = float(face_row[10])
+        lcm_x = float(face_row[12])
+    except (IndexError, TypeError, ValueError):
+        return False, "landmarks"
+    eye_span = abs(le_x - re_x) + 1e-5
+    mid_eye_x = (le_x + re_x) * 0.5
+    yaw_asym = abs(nt_x - mid_eye_x) / eye_span
+    mouth_span = abs(lcm_x - rcm_x) + 1e-5
+    mid_mouth_x = (lcm_x + rcm_x) * 0.5
+    mouth_asym = abs(nt_x - mid_mouth_x) / mouth_span
+    # 双眼高度差也反映侧脸/倾斜
+    eye_roll = abs(le_y - re_y) / (fh + 1e-5)
+    asym = max(yaw_asym, 0.6 * mouth_asym, eye_roll)
+    if asym > FACE_MAX_YAW_ASYM:
+        return False, "pose"
+    h, w = bgr_roi.shape[:2]
+    x1, y1 = max(0, int(x)), max(0, int(y))
+    x2, y2 = min(w, int(x + fw)), min(h, int(y + fh))
+    if x2 - x1 < 12 or y2 - y1 < 12:
+        return False, "small"
+    crop = bgr_roi[y1:y2, x1:x2]
+    try:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        sharp = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:
+        return False, "blur"
+    if sharp < FACE_MIN_SHARPNESS:
+        return False, "blur"
+    return True, "ok"
+
+
 def _yunet_face_locations(bgr_roi):
     """
     YuNet 定位人脸，通常数毫秒~几十毫秒。
@@ -737,22 +1203,39 @@ def _yunet_face_locations(bgr_roi):
     return [(top, right, bottom, left)]
 
 
-def _sface_feature_from_bgr(bgr_roi):
-    """YuNet 定位 + SFace 对齐提特征，失败返回 None。"""
+def _sface_feature_from_bgr(bgr_roi, *, require_quality=False):
+    """
+    YuNet 定位 + SFace 对齐提特征。
+    require_quality=True 时侧脸/模糊返回 (None, quality_reject_dict)。
+    底库加载时 require_quality=False，仅返回特征向量或 None。
+    """
     recognizer = _get_sface_recognizer()
     if recognizer is None or bgr_roi is None or bgr_roi.size == 0:
-        return None
+        return (None, None) if require_quality else None
     face_row = _yunet_best_face_row(bgr_roi)
     if face_row is None:
-        return None
+        return (None, None) if require_quality else None
+    if require_quality:
+        ok, reason = _assess_face_quality(bgr_roi, face_row)
+        if not ok:
+            return None, {
+                "auth_status": None,
+                "recognized_name": "",
+                "face_distance": None,
+                "face_similarity": None,
+                "face_found": True,
+                "quality_reject": True,
+                "quality_reason": reason,
+            }
     try:
         aligned = recognizer.alignCrop(bgr_roi, face_row)
         if aligned is None or aligned.size == 0:
-            return None
+            return (None, None) if require_quality else None
         feat = recognizer.feature(aligned)
-        return np.asarray(feat, dtype=np.float64).reshape(-1)
+        vec = np.asarray(feat, dtype=np.float64).reshape(-1)
+        return (vec, None) if require_quality else vec
     except Exception:
-        return None
+        return (None, None) if require_quality else None
 
 
 def _match_encoding(encoding, known_encodings, known_names):
@@ -768,19 +1251,25 @@ def _match_encoding(encoding, known_encodings, known_names):
         kn = np.linalg.norm(known, axis=1)
         vn = float(np.linalg.norm(vec))
         sims = (known @ vec) / np.maximum(kn * max(vn, 1e-8), 1e-8)
-        best_idx = int(np.argmax(sims))
-        best_sim = float(sims[best_idx])
+        # 同人多模板（原图+翻转）取最大余弦相似度
+        best_by_name = {}
+        for i, name in enumerate(known_names):
+            sim = float(sims[i])
+            if name not in best_by_name or sim > best_by_name[name][0]:
+                best_by_name[name] = (sim, i)
+        best_name, (best_sim, best_idx) = max(
+            best_by_name.items(), key=lambda kv: kv[1][0]
+        )
         best_distance = 1.0 - best_sim
         if best_sim >= SFACE_COSINE_THRESHOLD:
             return {
                 "auth_status": AUTH_STATUS_AUTHORIZED,
-                "recognized_name": known_names[best_idx],
+                "recognized_name": best_name,
                 "face_distance": best_distance,
                 "face_found": True,
                 "face_similarity": best_sim,
             }
         if best_sim > SFACE_REJECT_THRESHOLD:
-            # 模糊：侧脸/光线差，继续识别中
             return {
                 "auth_status": None,
                 "recognized_name": "",
@@ -797,12 +1286,19 @@ def _match_encoding(encoding, known_encodings, known_names):
         }
 
     distances = face_distance_np(known_encodings, encoding)
-    best_idx = int(np.argmin(distances))
-    best_distance = float(distances[best_idx])
+    # 同人多模板取最小距离
+    best_by_name = {}
+    for i, name in enumerate(known_names):
+        dist = float(distances[i])
+        if name not in best_by_name or dist < best_by_name[name][0]:
+            best_by_name[name] = (dist, i)
+    best_name, (best_distance, best_idx) = min(
+        best_by_name.items(), key=lambda kv: kv[1][0]
+    )
     if best_distance < FACE_DISTANCE_THRESHOLD:
         return {
             "auth_status": AUTH_STATUS_AUTHORIZED,
-            "recognized_name": known_names[best_idx],
+            "recognized_name": best_name,
             "face_distance": best_distance,
             "face_found": True,
             "face_similarity": None,
@@ -892,7 +1388,8 @@ def _encode_face_crop(rgb_roi, location, face_recognition, max_side=150):
 
 def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_names):
     """
-    人体上半身 ROI → YuNet 定位 → SFace（优先）或 dlib 编码比对。
+    人体上半身 ROI → YuNet 质量过滤 → SFace（优先）或 dlib 编码比对。
+    侧脸/模糊：quality_reject，保持识别中，不累加未授权。
     未检出脸返回 face_found=False（不告警、不写缓存）。
     """
     pending = {
@@ -920,13 +1417,38 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         method = FACE_ENGINE if FACE_ENGINE != "none" else "yunet"
         encoding = None
 
-        # 1) SFace 主路径（快）
+        # 1) SFace 主路径（含姿态/清晰度过滤）
         if FACE_ENGINE == "sface" or _get_sface_recognizer() is not None:
             method = "sface"
-            encoding = _sface_feature_from_bgr(roi)
+            encoding, qrej = _sface_feature_from_bgr(roi, require_quality=True)
+            if qrej is not None:
+                ms = (time.perf_counter() - t0) * 1000
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"人脸质量拒绝 {ms:.0f}ms ({qrej.get('quality_reason')}) | 识别中"
+                )
+                return qrej
 
-        # 2) dlib 回退
+        # 2) dlib 回退（同样做 YuNet 质量过滤）
         if encoding is None and FACE_ENGINE != "sface":
+            face_row = _yunet_best_face_row(roi)
+            if face_row is not None:
+                ok, reason = _assess_face_quality(roi, face_row)
+                if not ok:
+                    ms = (time.perf_counter() - t0) * 1000
+                    print(
+                        f"[{datetime.now().strftime('%H:%M:%S')}] "
+                        f"人脸质量拒绝 {ms:.0f}ms ({reason}) | 识别中"
+                    )
+                    return {
+                        "auth_status": None,
+                        "recognized_name": "",
+                        "face_distance": None,
+                        "face_similarity": None,
+                        "face_found": True,
+                        "quality_reject": True,
+                        "quality_reason": reason,
+                    }
             try:
                 import face_recognition
             except ImportError:
@@ -1015,8 +1537,22 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         return pending
 
 
-def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names, cx, cy):
-    """后台线程执行人脸比对；新样本计入确认 streak，强授权可直接缓存。"""
+def _apply_identity_to_det(det, identity):
+    if not identity:
+        return
+    det["auth_status"] = identity.get("auth_status")
+    det["recognized_name"] = identity.get("recognized_name", "")
+    det["face_distance"] = identity.get("face_distance")
+    det["face_similarity"] = identity.get("face_similarity")
+    det["from_confirmed_cache"] = bool(
+        identity.get("from_confirmed_cache") or identity.get("from_track_lock")
+    )
+    det["quality_reject"] = bool(identity.get("quality_reject"))
+
+
+def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names,
+                  cx, cy, track_id=None):
+    """后台人脸比对；结果按 track_id 投票/锁定，质量拒绝不累加未授权。"""
     try:
         result = recognize_face_in_roi(
             frame_bgr, x1, y1, x2, y2, known_encodings, known_names
@@ -1025,6 +1561,23 @@ def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names, cx, c
             return
         result = dict(result)
         result["result_ts"] = time.time()
+        if track_id is not None:
+            voted = _track_apply_vote(track_id, result)
+            if voted is not None:
+                result = dict(voted)
+                result["result_ts"] = time.time()
+        if result.get("quality_reject"):
+            # 侧脸/模糊：只刷新「识别中」，打断未授权 streak
+            _update_raw_face_result(cx, cy, {
+                "face_found": True,
+                "auth_status": None,
+                "recognized_name": "",
+                "face_distance": result.get("face_distance"),
+                "face_similarity": result.get("face_similarity"),
+                "quality_reject": True,
+                "result_ts": result["result_ts"],
+            })
+            return
         sim = result.get("face_similarity")
         strong = (
             result.get("auth_status") == AUTH_STATUS_AUTHORIZED
@@ -1032,10 +1585,16 @@ def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names, cx, c
             and isinstance(sim, (int, float))
             and float(sim) >= SFACE_STRONG_AUTH
         )
-        # 所有有效样本都进 raw + streak；强授权额外写入长期缓存
         _update_raw_face_result(cx, cy, result)
-        if strong:
+        if strong or result.get("from_track_lock"):
             _update_face_cache(cx, cy, result)
+        elif (
+            result.get("auth_status") == AUTH_STATUS_AUTHORIZED
+            and track_id is not None
+        ):
+            locked = _track_locked_identity(track_id)
+            if locked:
+                _update_face_cache(cx, cy, locked)
     finally:
         with _face_job_lock:
             _face_job["busy"] = False
@@ -1044,33 +1603,32 @@ def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names, cx, c
 def schedule_face_recognition(frame_bgr, det, known_encodings, known_names):
     """
     对接近度最高的目标异步做人脸识别。
-    有缓存则直接填回 det；无缓存时保持 auth_status=None（识别中），不误报未授权。
+    优先使用 track_id 锁定身份；无缓存时保持识别中。
     """
     cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
     now = time.time()
+    track_id = det.get("track_id")
+
+    locked = _track_locked_identity(track_id)
+    if locked is not None:
+        _apply_identity_to_det(det, locked)
+        return
+
     cached = _cache_hit(cx, cy, now)
     if cached is not None:
-        det["auth_status"] = cached["auth_status"]
-        det["recognized_name"] = cached["recognized_name"]
-        det["face_distance"] = cached["face_distance"]
-        det["face_similarity"] = cached.get("face_similarity")
-        det["from_confirmed_cache"] = True
+        _apply_identity_to_det(det, {**cached, "from_confirmed_cache": True})
         return
     raw = _raw_face_hit(cx, cy, now)
     if raw is not None:
-        det["auth_status"] = raw["auth_status"]
-        det["recognized_name"] = raw["recognized_name"]
-        det["face_distance"] = raw["face_distance"]
-        det["face_similarity"] = raw.get("face_similarity")
-        det["from_confirmed_cache"] = False
+        _apply_identity_to_det(det, raw)
         return
 
-    # 识别中：不占位 UNAUTHORIZED，避免侧脸误报
     det["auth_status"] = None
     det["recognized_name"] = ""
     det["face_distance"] = None
     det["face_similarity"] = None
     det["from_confirmed_cache"] = False
+    det["quality_reject"] = False
 
     with _face_job_lock:
         busy = _face_job["busy"]
@@ -1086,20 +1644,29 @@ def schedule_face_recognition(frame_bgr, det, known_encodings, known_names):
         args=(
             frame_copy,
             det["x1"], det["y1"], det["x2"], det["y2"],
-            known_encodings, known_names, cx, cy,
+            known_encodings, known_names, cx, cy, track_id,
         ),
         daemon=True,
     ).start()
 
 
-def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_area,
-                           known_encodings, known_names, run_face=False):
+def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_h, frame_w,
+                           known_encodings, known_names, run_face=False,
+                           track_id=None):
     """
-    由单个 YOLO person 框构建检测结果。
-    run_face=True 时仅对主目标调度异步人脸识别（带缓存）。
+    由单个 YOLO person 框构建检测结果（综合接近度 + ROI + track）。
+    run_face=True 时仅对主目标调度异步人脸识别。
     """
-    bb_area = max(0, (x2 - x1) * (y2 - y1))
-    area_ratio = bb_area / frame_area if frame_area > 0 else 0.0
+    proximity, area_ratio, d_factor, y_norm, in_roi = compute_proximity(
+        x1, y1, x2, y2, frame_h, frame_w
+    )
+    d_est, d_factor_h = estimate_distance_m(y1, y2, frame_h)
+    band = distance_band(d_est)
+    foot_x = (float(x1) + float(x2)) * 0.5
+    foot_y = float(y2)
+    dwell, motion = _update_track_meta(
+        track_id, time.time(), foot_xy=(foot_x, foot_y), d_est=d_est, in_roi=in_roi
+    )
 
     det = {
         "x1": x1,
@@ -1108,31 +1675,42 @@ def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_area,
         "y2": y2,
         "confidence": confidence,
         "area_ratio": area_ratio,
-        "proximity_ratio": area_ratio,
+        "proximity_ratio": proximity,
+        "d_factor": d_factor,
+        "d_factor_h": d_factor_h,
+        "d_est": d_est,
+        "distance_band": band,
+        "y_norm": y_norm,
+        "in_roi": in_roi,
+        "track_id": track_id,
+        "dwell_sec": dwell,
+        "motion": motion,
         "auth_status": None,
         "recognized_name": "",
         "face_distance": None,
         "danger_level": 0,
+        "alert_type": ALERT_TYPE_INTRUSION,
     }
 
-    if area_ratio < PROXIMITY_ALERT_THRESHOLD:
+    # 接近度不足或不在 ROI：不做人脸、不告警
+    if proximity < PROXIMITY_ALERT_THRESHOLD or not in_roi:
         return det
 
-    if run_face:
+    locked = _track_locked_identity(track_id)
+    if locked is not None:
+        _apply_identity_to_det(det, locked)
+    elif run_face:
         schedule_face_recognition(frame_bgr, det, known_encodings, known_names)
     else:
-        # 非主目标：尽量复用缓存，避免重复算力
         cx, cy = _bbox_center(x1, y1, x2, y2)
         cached = _cache_hit(cx, cy, time.time())
         if cached is not None:
-            det["auth_status"] = cached["auth_status"]
-            det["recognized_name"] = cached["recognized_name"]
-            det["face_distance"] = cached["face_distance"]
+            _apply_identity_to_det(det, {**cached, "from_confirmed_cache": True})
 
     if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
         det["danger_level"] = 0
     elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
-        det["danger_level"] = 3 if area_ratio >= 0.3 else 2
+        det["danger_level"] = 3 if proximity >= 0.45 else 2
 
     return det
 
@@ -1140,6 +1718,112 @@ def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_area,
 # =====================================================================
 #  心跳 / 上报
 # =====================================================================
+
+def update_low_light_state(frame):
+    """周期性用灰度均值判断弱光，供 CLAHE 与置信度微调。"""
+    now = time.time()
+    if now - _low_light["checked_at"] < 1.0:
+        return _low_light["active"]
+    if frame is None or frame.size == 0:
+        return False
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    mean = float(gray.mean())
+    _low_light["mean"] = mean
+    _low_light["active"] = mean < CLAHE_LUMINANCE
+    _low_light["checked_at"] = now
+    return _low_light["active"]
+
+
+def _enhance_face_roi(bgr):
+    if not _low_light["active"] or bgr is None or bgr.size == 0:
+        return bgr
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    l2 = _clahe.apply(l_ch)
+    return cv2.cvtColor(cv2.merge((l2, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
+
+
+def apply_edge_config(cfg):
+    """心跳下发的算法阈值，写入内存后下一帧生效。"""
+    global COOL_DOWN_INTERVAL, SFACE_COSINE_THRESHOLD, DIST_DANGER_M, TAILGATE_ENABLE
+    if not isinstance(cfg, dict):
+        return
+    changed = []
+    if cfg.get("cooldownSec") is not None:
+        COOL_DOWN_INTERVAL = max(1.0, float(cfg["cooldownSec"]))
+        changed.append(f"cooldown={COOL_DOWN_INTERVAL:.0f}s")
+    if cfg.get("faceMatchThreshold") is not None:
+        SFACE_COSINE_THRESHOLD = float(cfg["faceMatchThreshold"])
+        changed.append(f"face={SFACE_COSINE_THRESHOLD:.3f}")
+    if cfg.get("dangerDistanceM") is not None:
+        DIST_DANGER_M = float(cfg["dangerDistanceM"])
+        changed.append(f"danger<={DIST_DANGER_M:.2f}m")
+    if "tailgateEnabled" in cfg and cfg.get("tailgateEnabled") is not None:
+        TAILGATE_ENABLE = bool(cfg.get("tailgateEnabled"))
+        changed.append(f"tailgate={'on' if TAILGATE_ENABLE else 'off'}")
+    if changed:
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] "
+            f"边缘参数已热更新: {', '.join(changed)}"
+        )
+
+
+def _boxes_close(a, b, limit_px=None):
+    limit = TAILGATE_CLOSE_PX if limit_px is None else limit_px
+    acx = (a["x1"] + a["x2"]) * 0.5
+    acy = (a["y1"] + a["y2"]) * 0.5
+    bcx = (b["x1"] + b["x2"]) * 0.5
+    bcy = (b["y1"] + b["y2"]) * 0.5
+    return math.hypot(acx - bcx, acy - bcy) <= limit
+
+
+def evaluate_scene_alerts(detections):
+    """尾随与遮挡徘徊。返回 [(det, alert_type), ...]。"""
+    extras = []
+    zone = [
+        d for d in detections
+        if d.get("in_roi") and d.get("proximity_ratio", 0) >= PROXIMITY_ALERT_THRESHOLD
+    ]
+    if TAILGATE_ENABLE and len(zone) >= 2:
+        auths = [d for d in zone if d.get("auth_status") == AUTH_STATUS_AUTHORIZED]
+        unauths = [d for d in zone if d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED]
+        if auths and unauths:
+            target = unauths[0]
+            target["alert_type"] = ALERT_TYPE_TAILGATING
+            extras.append((target, ALERT_TYPE_TAILGATING))
+        elif len(auths) == 1:
+            others = [d for d in zone if d is not auths[0]]
+            if others and _boxes_close(auths[0], others[0]):
+                target = others[0]
+                target["alert_type"] = ALERT_TYPE_TAILGATING
+                extras.append((target, ALERT_TYPE_TAILGATING))
+    for det in zone:
+        if det.get("motion") == "Passing":
+            continue
+        if det.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+            continue
+        if det.get("dwell_sec", 0) >= LOITER_SECONDS and not _track_quality_face(det.get("track_id")):
+            det["alert_type"] = ALERT_TYPE_LOITERING
+            extras.append((det, ALERT_TYPE_LOITERING))
+            break
+    return extras
+
+
+def _select_face_index(candidates):
+    """优先给未锁定身份的 ROI 目标做人脸；尾随开启时下一帧会轮到第二人。"""
+    ranked = []
+    for i, item in enumerate(candidates):
+        prox, in_roi = item[0], item[1]
+        tid = item[-1]
+        if not in_roi or prox < PROXIMITY_ALERT_THRESHOLD:
+            continue
+        locked = _track_locked_identity(tid) is not None
+        ranked.append((0 if not locked else 1, -prox, i))
+    if not ranked:
+        return -1
+    ranked.sort()
+    return ranked[0][2]
+
 
 def resolve_heartbeat_url():
     """根据上报地址或显式配置解析心跳 URL。"""
@@ -1269,17 +1953,29 @@ def start_mjpeg_server():
 
 
 def send_heartbeat():
-    """向云端上报设备存活心跳（仅保活，不处理门锁指令）。"""
+    """向云端上报设备存活心跳，并应用下发的 edgeConfig（保留门锁指令字段）。"""
     try:
         response = requests.post(BACKEND_HEARTBEAT_URL, timeout=1.5)
         if response.status_code == 200:
             try:
                 res_json = response.json()
                 if res_json.get("code") == 200:
+                    data = res_json.get("data") or {}
+                    if isinstance(data, dict):
+                        if data.get("edgeConfig"):
+                            apply_edge_config(data.get("edgeConfig"))
+                        cmd = data.get("doorCommand")
+                        if cmd:
+                            print(
+                                f"[{datetime.now().strftime('%H:%M:%S')}] "
+                                f"心跳携带门锁指令 doorCommand={cmd} "
+                                f"doorStatus={data.get('doorStatus')}"
+                            )
                     print(
                         f"[{datetime.now().strftime('%H:%M:%S')}] "
                         f"心跳上报成功 deviceId={DEVICE_ID}"
                     )
+                    flush_offline_cache(max_items=3)
                 else:
                     print(
                         f"[{datetime.now().strftime('%H:%M:%S')}] "
@@ -1314,7 +2010,7 @@ def frame_to_jpeg_base64(frame, quality=75):
 
 
 def build_alert_payload(frame, device_id, area_ratio, auth_status, recognized_name,
-                        danger_level):
+                        danger_level, alert_type=ALERT_TYPE_INTRUSION):
     """
     构造上报 JSON（规格字段）+ 后端兼容字段。
 
@@ -1336,6 +2032,8 @@ def build_alert_payload(frame, device_id, area_ratio, auth_status, recognized_na
         "dangerLevel": int(danger_level),
         "recognizedName": recognized_name,
         "authStatus": auth_status,
+        "alertType": alert_type,
+        "alert_type": alert_type,
     }
 
 
@@ -1349,11 +2047,13 @@ def log_authorized_passage(frame_clean, det):
 
     dist = det.get("face_distance")
     dist_txt = f"{dist:.3f}" if dist is not None else "-"
+    prox = det.get("proximity_ratio", det.get("area_ratio", 0.0))
     print(
         f"[{datetime.now().strftime('%H:%M:%S')}] "
         f"[通行] 身份识别通过 | 姓名={det.get('recognized_name')} | "
         f"状态=已授权 | "
-        f"面积比={det.get('area_ratio', 0):.3f} | 人脸距离={dist_txt}"
+        f"接近度={prox:.3f} 面积比={det.get('area_ratio', 0):.3f} | "
+        f"人脸距离={dist_txt} | track={det.get('track_id')}"
     )
     capture_frame = render_alert_capture(
         frame_clean,
@@ -1367,32 +2067,30 @@ def log_authorized_passage(frame_clean, det):
         args=(
             capture_frame,
             DEVICE_ID,
-            det["area_ratio"],
+            prox,
             0,
             AUTH_STATUS_AUTHORIZED,
             det.get("recognized_name", ""),
+            ALERT_TYPE_INTRUSION,
         ),
         daemon=True,
     ).start()
 
 
 def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
-                              auth_status, recognized_name):
+                              auth_status, recognized_name,
+                              alert_type=ALERT_TYPE_INTRUSION):
     """
-    后台线程：编码抓拍 + HTTP 推送未授权告警。
+    后台线程：内存 JPEG 编码 + HTTP 推送（无磁盘临时文件）。
 
-    主循环严禁调用 cv2.imwrite / requests.post，所有阻塞 I/O 均在此完成。
-    同时发送：
-      1) multipart/form-data（兼容现有 /api/alerts/upload）
-      2) JSON 规格字段写入 form，便于后端扩展读取
+    主循环严禁阻塞 I/O；使用 cv2.imencode + BytesIO 直接 multipart 上传。
     """
-    temp_image_path = None
     try:
         payload = build_alert_payload(
-            frame, device_id, area_ratio, auth_status, recognized_name, danger_level
+            frame, device_id, area_ratio, auth_status, recognized_name,
+            danger_level, alert_type,
         )
 
-        # 控制台打印时省略超长 base64
         preview = {
             k: (v[:48] + "...") if k == "snapshot_base64" and isinstance(v, str) else v
             for k, v in payload.items()
@@ -1402,8 +2100,13 @@ def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
             f"告警 JSON 就绪: {preview}"
         )
 
-        temp_image_path = f"temp_capture_{uuid.uuid4().hex}.jpg"
-        cv2.imwrite(temp_image_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        ok, buf = cv2.imencode(
+            ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+        )
+        if not ok:
+            raise RuntimeError("cv2.imencode('.jpg') failed")
+        image_bytes = buf.tobytes()
+        bio = io.BytesIO(image_bytes)
 
         form_data = {
             "deviceId": str(payload["deviceId"]),
@@ -1414,19 +2117,19 @@ def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
             "auth_status": payload["auth_status"],
             "recognized_name": payload["recognized_name"],
             "area_ratio": str(payload["area_ratio"]),
+            "alertType": payload.get("alertType") or ALERT_TYPE_INTRUSION,
+            "alert_type": payload.get("alert_type") or ALERT_TYPE_INTRUSION,
             "snapshot_base64": payload["snapshot_base64"],
         }
-
-        with open(temp_image_path, "rb") as image_file:
-            files = {
-                "file": (os.path.basename(temp_image_path), image_file, "image/jpeg"),
-            }
-            response = requests.post(
-                BACKEND_UPLOAD_URL,
-                data=form_data,
-                files=files,
-                timeout=3.0,
-            )
+        files = {
+            "file": ("capture.jpg", bio, "image/jpeg"),
+        }
+        response = requests.post(
+            BACKEND_UPLOAD_URL,
+            data=form_data,
+            files=files,
+            timeout=3.0,
+        )
 
         if response.status_code == 200:
             print(
@@ -1439,29 +2142,117 @@ def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
                 f"[WARN] 告警上报失败 HTTP {response.status_code}: {response.text[:200]}"
             )
+            _enqueue_offline(image_bytes, form_data)
 
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"[WARN] 后端未启动或网络中断，本地监控继续运行: {exc}"
+            f"[WARN] 后端未启动或网络中断，已写入离线缓存: {exc}"
         )
+        if "image_bytes" in locals() and "form_data" in locals():
+            _enqueue_offline(image_bytes, form_data)
     except requests.exceptions.RequestException as exc:
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
-            f"[WARN] 告警 HTTP 请求异常: {exc}"
+            f"[WARN] 告警 HTTP 请求异常，已写入离线缓存: {exc}"
         )
+        if "image_bytes" in locals() and "form_data" in locals():
+            _enqueue_offline(image_bytes, form_data)
     except Exception:
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
             f"[ERROR] 异步告警线程异常（主监控不受影响）:"
         )
         traceback.print_exc()
-    finally:
-        if temp_image_path and os.path.exists(temp_image_path):
+
+
+def _offline_pairs():
+    os.makedirs(OFFLINE_CACHE_DIR, exist_ok=True)
+    jpgs = sorted(glob.glob(os.path.join(OFFLINE_CACHE_DIR, "*.jpg")))
+    return jpgs
+
+
+def _offline_total_bytes():
+    total = 0
+    if not os.path.isdir(OFFLINE_CACHE_DIR):
+        return 0
+    for name in os.listdir(OFFLINE_CACHE_DIR):
+        path = os.path.join(OFFLINE_CACHE_DIR, name)
+        if os.path.isfile(path):
+            total += os.path.getsize(path)
+    return total
+
+
+def _trim_offline_cache():
+    jpgs = _offline_pairs()
+    while jpgs and (len(jpgs) > OFFLINE_MAX_ITEMS or _offline_total_bytes() > OFFLINE_MAX_BYTES):
+        old = jpgs.pop(0)
+        js = os.path.splitext(old)[0] + ".json"
+        for path in (old, js):
             try:
-                os.remove(temp_image_path)
+                if os.path.isfile(path):
+                    os.remove(path)
             except OSError:
                 pass
+        print(f"[INFO] 离线缓存 FIFO 清理: {os.path.basename(old)}")
+
+
+def _enqueue_offline(image_bytes, form_data):
+    """断网时把 JPEG 与元数据写入本地 FIFO 目录。"""
+    if not image_bytes:
+        return
+    with _offline_lock:
+        os.makedirs(OFFLINE_CACHE_DIR, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        base = os.path.join(OFFLINE_CACHE_DIR, stamp)
+        with open(base + ".jpg", "wb") as handle:
+            handle.write(image_bytes)
+        meta = {
+            k: v for k, v in form_data.items()
+            if k != "snapshot_base64"
+        }
+        with open(base + ".json", "w", encoding="utf-8") as handle:
+            json.dump(meta, handle, ensure_ascii=False)
+        _trim_offline_cache()
+        print(f"[INFO] 告警已写入离线缓存 {stamp}.jpg")
+
+
+def flush_offline_cache(max_items=3):
+    """心跳恢复后按时间顺序重传少量积压告警。"""
+    with _offline_lock:
+        jpgs = _offline_pairs()
+        sent = 0
+        for jpg in jpgs:
+            if sent >= max_items:
+                break
+            js = os.path.splitext(jpg)[0] + ".json"
+            if not os.path.isfile(js):
+                continue
+            try:
+                with open(js, "r", encoding="utf-8") as handle:
+                    meta = json.load(handle)
+                with open(jpg, "rb") as handle:
+                    image_bytes = handle.read()
+                bio = io.BytesIO(image_bytes)
+                response = requests.post(
+                    BACKEND_UPLOAD_URL,
+                    data=meta,
+                    files={"file": ("capture.jpg", bio, "image/jpeg")},
+                    timeout=3.0,
+                )
+                if response.status_code != 200:
+                    print(f"[WARN] 离线重传失败 HTTP {response.status_code}，暂停本轮")
+                    break
+                os.remove(jpg)
+                os.remove(js)
+                sent += 1
+                print(f"[INFO] 离线告警已重传并删除 {os.path.basename(jpg)}")
+            except requests.exceptions.RequestException as exc:
+                print(f"[WARN] 离线重传中断: {exc}")
+                break
+            except Exception:
+                traceback.print_exc()
+                break
 
 
 def audible_beep():
@@ -1497,31 +2288,89 @@ def render_alert_capture(frame, x1, y1, x2, y2, confidence,
     return annotated
 
 
+def draw_roi_overlay(frame, alert=False):
+    """半透明 ROI：常态绿色，告警红色。多边形存在时用 pointPolygon 同款顶点。"""
+    h, w = frame.shape[:2]
+    color = (0, 0, 220) if alert else (0, 180, 0)
+    overlay = frame.copy()
+    if ALERT_ROI_POLYGON:
+        poly = np.array(
+            [[int(p[0] * w), int(p[1] * h)] for p in ALERT_ROI_POLYGON],
+            dtype=np.int32,
+        )
+        cv2.fillPoly(overlay, [poly], color)
+        cv2.addWeighted(overlay, 0.22, frame, 0.78, 0, frame)
+        cv2.polylines(frame, [poly], True, color, 2)
+        label_x, label_y = int(poly[:, 0].min()) + 6, int(poly[:, 1].min()) + 16
+    else:
+        rx1, ry1, rx2, ry2 = ALERT_ROI_NORM
+        p1 = (int(rx1 * w), int(ry1 * h))
+        p2 = (int(rx2 * w), int(ry2 * h))
+        cv2.rectangle(overlay, p1, p2, color, -1)
+        cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
+        cv2.rectangle(frame, p1, p2, color, 2)
+        label_x, label_y = p1[0] + 6, p1[1] + 16
+    label_x = min(max(0, label_x), max(0, w - 80))
+    label_y = min(max(16, label_y), h - 4)
+    put_cn_text(frame, "ROI 警戒区", (label_x, label_y), color, font_size=14)
+
+
+def draw_status_hud(frame):
+    if _low_light.get("active"):
+        put_cn_text(frame, "Low-Light Enhanced", (12, 28), (0, 220, 255), font_size=18)
+
+
 def draw_live_detection(frame, x1, y1, x2, y2, confidence, in_cooldown,
-                        auth_status=None, recognized_name="", area_ratio=0.0):
-    """实时预览绘制：授权绿框，未授权红框，识别中黄框，远处灰框。"""
+                        auth_status=None, recognized_name="", area_ratio=0.0,
+                        proximity_ratio=None, track_id=None, dwell_sec=0.0,
+                        in_roi=True, d_est=None, distance_band_name=None, motion=None):
+    """实时预览绘制：授权绿框，未授权红框，识别中黄框，远处/区外灰框。"""
+    prox = float(proximity_ratio if proximity_ratio is not None else area_ratio)
+    tid_txt = f"#{track_id} " if track_id is not None else ""
     if auth_status == AUTH_STATUS_AUTHORIZED:
         color = (0, 200, 0)
-        label = f"{recognized_name} ({confidence:.2f})"
+        label = f"{tid_txt}{recognized_name} ({confidence:.2f})"
     elif auth_status == AUTH_STATUS_UNAUTHORIZED:
         color = (0, 0, 255)
-        label = f"陌生人 ({confidence:.2f})"
+        label = f"{tid_txt}陌生人 ({confidence:.2f})"
         if recognized_name:
-            label = f"{recognized_name} ({confidence:.2f})"
-    elif area_ratio >= PROXIMITY_ALERT_THRESHOLD:
+            label = f"{tid_txt}{recognized_name} ({confidence:.2f})"
+    elif prox >= PROXIMITY_ALERT_THRESHOLD and in_roi:
         color = (0, 200, 255)
-        label = f"识别中… 占比={area_ratio:.2f}"
+        label = f"{tid_txt}识别中… P={prox:.2f}"
     else:
-        # 未触发人脸比对（R 过小）
         color = (180, 180, 180)
-        label = f"行人 占比={area_ratio:.2f} ({confidence:.2f})"
+        zone = "" if in_roi else "区外 "
+        label = f"{tid_txt}{zone}行人 P={prox:.2f} ({confidence:.2f})"
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
     put_cn_text(frame, label, (x1, max(18, y1 - 6)), color, font_size=20)
+    extra_y = min(y2 + 18, frame.shape[0] - 8)
+    if d_est is not None:
+        band = distance_band_name or distance_band(d_est)
+        put_cn_text(
+            frame, f"D={d_est:.1f}m {band}",
+            (x1, extra_y), color, font_size=15,
+        )
+        extra_y = min(extra_y + 18, frame.shape[0] - 8)
+    if motion and motion != "Unknown":
+        motion_cn = {
+            "Approaching": "靠近",
+            "Leaving": "远离",
+            "Passing": "路过",
+        }.get(motion, motion)
+        put_cn_text(frame, motion_cn, (x1, extra_y), color, font_size=15)
+        extra_y = min(extra_y + 18, frame.shape[0] - 8)
+    if track_id is not None and dwell_sec > 0.5:
+        put_cn_text(
+            frame, f"滞留{dwell_sec:.1f}s",
+            (x1, extra_y),
+            color, font_size=16,
+        )
     if in_cooldown and auth_status == AUTH_STATUS_UNAUTHORIZED:
         put_cn_text(
             frame, "冷却中",
-            (x1, min(y2 + 22, frame.shape[0] - 8)),
+            (x1, min(y2 + 56, frame.shape[0] - 8)),
             color, font_size=18,
         )
 
@@ -1667,67 +2516,96 @@ class FrameSource:
 
 
 def pick_primary_detection(detections):
-    """
-    选取当前帧中面积占比最高、且接近度达阈值的人员（含识别中）。
-    """
+    """选取 ROI 内综合接近度最高、且达阈值的人员（含识别中）。"""
     best = None
     for det in detections:
-        if det["area_ratio"] >= PROXIMITY_ALERT_THRESHOLD:
-            if best is None or det["area_ratio"] > best["area_ratio"]:
+        if not det.get("in_roi", True):
+            continue
+        prox = det.get("proximity_ratio", det.get("area_ratio", 0.0))
+        if prox >= PROXIMITY_ALERT_THRESHOLD:
+            if best is None or prox > best.get(
+                "proximity_ratio", best.get("area_ratio", 0.0)
+            ):
                 best = det
     return best
 
 
-def dispatch_detection_action(frame_clean, det):
+def dispatch_detection_action(frame_clean, det, alert_type=ALERT_TYPE_INTRUSION):
     """
     根据身份识别结果分发动作：
       - AUTHORIZED  → 通行日志上报
-      - UNAUTHORIZED → 10s 冷却后异步告警上报
-    返回: True 表示本次触发了告警上报（用于更新冷却计时）
+      - UNAUTHORIZED → 冷却后异步告警上报
+      - TAILGATING / LOITERING → 独立冷却的场景告警
+    路过（Passing）的普通未授权入侵会被抑制。
+    返回: True 表示本次触发了告警上报
     """
     global last_alert_time
 
     auth_status = det.get("auth_status")
-    if auth_status == AUTH_STATUS_AUTHORIZED:
+    if alert_type == ALERT_TYPE_INTRUSION and auth_status == AUTH_STATUS_AUTHORIZED:
         log_authorized_passage(frame_clean, det)
         return False
 
-    if auth_status != AUTH_STATUS_UNAUTHORIZED:
+    if alert_type == ALERT_TYPE_INTRUSION and det.get("motion") == "Passing":
         return False
 
-    if det["area_ratio"] < PROXIMITY_ALERT_THRESHOLD:
+    if alert_type == ALERT_TYPE_INTRUSION and auth_status != AUTH_STATUS_UNAUTHORIZED:
+        return False
+
+    prox = det.get("proximity_ratio", det.get("area_ratio", 0.0))
+    if alert_type == ALERT_TYPE_INTRUSION and (
+        prox < PROXIMITY_ALERT_THRESHOLD or not det.get("in_roi", True)
+    ):
         return False
 
     now = time.time()
-    if now - last_alert_time < COOL_DOWN_INTERVAL:
+    cool_key = alert_type if alert_type != ALERT_TYPE_INTRUSION else "INTRUSION"
+    if now - _alert_cooldown.get(cool_key, 0.0) < COOL_DOWN_INTERVAL:
         return False
 
+    if alert_type == ALERT_TYPE_LOITERING and not auth_status:
+        auth_status = AUTH_STATUS_UNAUTHORIZED
+        det["recognized_name"] = det.get("recognized_name") or "遮挡徘徊"
+    if alert_type == ALERT_TYPE_TAILGATING and not auth_status:
+        auth_status = AUTH_STATUS_UNAUTHORIZED
+        det["recognized_name"] = det.get("recognized_name") or "尾随人员"
+
     audible_beep()
+    title_name = det.get("recognized_name", UNAUTHORIZED_DISPLAY_NAME)
+    if alert_type == ALERT_TYPE_TAILGATING:
+        title_name = title_name or "尾随闯入"
+    elif alert_type == ALERT_TYPE_LOITERING:
+        title_name = title_name or "遮挡徘徊"
     capture_frame = render_alert_capture(
         frame_clean,
         det["x1"], det["y1"], det["x2"], det["y2"],
         det["confidence"],
-        auth_status=auth_status,
-        recognized_name=det.get("recognized_name", UNAUTHORIZED_DISPLAY_NAME),
+        auth_status=auth_status or AUTH_STATUS_UNAUTHORIZED,
+        recognized_name=title_name,
     )
+    danger = det.get("danger_level") or (3 if alert_type != ALERT_TYPE_INTRUSION else 2)
     threading.Thread(
         target=save_and_post_alert_async,
         args=(
             capture_frame,
             DEVICE_ID,
-            det["area_ratio"],
-            det["danger_level"],
-            auth_status,
-            det.get("recognized_name", UNAUTHORIZED_DISPLAY_NAME),
+            prox,
+            danger,
+            auth_status or AUTH_STATUS_UNAUTHORIZED,
+            title_name,
+            alert_type,
         ),
         daemon=True,
     ).start()
-    last_alert_time = now
+    _alert_cooldown[cool_key] = now
+    if alert_type == ALERT_TYPE_INTRUSION:
+        last_alert_time = now
     print(
         f"[{datetime.now().strftime('%H:%M:%S')}] "
-        f"告警上报触发: auth_status={auth_status}, "
-        f"name={det.get('recognized_name')}, "
-        f"area_ratio={det['area_ratio']:.3f}, danger={det['danger_level']}"
+        f"告警上报触发: type={alert_type}, auth_status={auth_status}, "
+        f"name={title_name}, "
+        f"proximity={prox:.3f}, D={det.get('d_est')}, motion={det.get('motion')}, "
+        f"track={det.get('track_id')}, danger={danger}"
     )
     return True
 
@@ -1747,8 +2625,9 @@ def main():
     except Exception as exc:
         print(f"[WARN] model.to({yolo_device}) 失败，将在推理时指定 device: {exc}")
 
-    # ===== 预加载授权人脸库（128 维特征缓存，支持 .reload 热更新） =====
-    known_encodings, known_names = load_authorized_faces()
+    # ===== 预加载授权人脸库（双模板 + 原子引用，支持 .reload 热更新） =====
+    enc0, names0 = load_authorized_faces()
+    set_face_bank(enc0, names0)
     face_reload_state = {"last_reload_mtime": 0.0}
     reload_flag = os.path.join(AUTHORIZED_FACES_DIR, ".reload")
     if os.path.isfile(reload_flag):
@@ -1771,7 +2650,8 @@ def main():
         f"[INFO] 性能参数: device={yolo_device}, weights={YOLO_WEIGHTS}, "
         f"imgsz={YOLO_IMGSZ}, frame_w<={YOLO_FRAME_MAX_WIDTH}, "
         f"推理间隔={INFERENCE_INTERVAL}s, 人脸间隔={FACE_CHECK_INTERVAL}s, "
-        f"缓存={FACE_CACHE_TTL}s, ROI<={FACE_ROI_MAX_SIDE}"
+        f"缓存={FACE_CACHE_TTL}s, ROI<={FACE_ROI_MAX_SIDE}, "
+        f"ByteTrack={'on' if USE_BYTETRACK else 'off'}"
     )
     if FACE_ENGINE == "sface":
         thr_desc = (
@@ -1782,12 +2662,14 @@ def main():
         thr_desc = (
             f"授权距离<{FACE_DISTANCE_THRESHOLD}, 拒绝距离>={FACE_REJECT_DISTANCE}"
         )
+    bank_n = len(set(names0))
     print(
-        f"[INFO] 人脸门控: engine={FACE_ENGINE}, R>={PROXIMITY_ALERT_THRESHOLD}, "
-        f"{thr_desc}, 未授权确认={UNAUTH_CONFIRM_FRAMES}帧, "
-        f"授权确认={AUTH_CONFIRM_FRAMES}帧, 授权人员={len(known_encodings)} 人"
+        f"[INFO] 人脸门控: engine={FACE_ENGINE}, P>={PROXIMITY_ALERT_THRESHOLD}, "
+        f"ROI={ALERT_ROI_NORM}, {thr_desc}, "
+        f"未授权确认={UNAUTH_CONFIRM_FRAMES}帧, "
+        f"授权确认={AUTH_CONFIRM_FRAMES}帧, 授权人员={bank_n} 人"
     )
-    print("[INFO] 支持管理端新增后热加载（检测 authorized_faces/.reload）")
+    print("[INFO] 支持管理端新增后热加载（原子替换白名单，检测 .reload）")
     if is_image_mode:
         print("[INFO] 当前为静态图片演示模式，仅执行一次检测与条件上报")
     start_mjpeg_server()
@@ -1829,49 +2711,69 @@ def main():
                         interpolation=cv2.INTER_AREA,
                     )
 
-                # 仅检 person；GPU/CPU 由 yolo_device 指定
-                results = model(
-                    infer_frame,
-                    conf=CONF_THRESHOLD,
+                # ByteTrack 跟踪 person；GPU/CPU 由 yolo_device 指定
+                update_low_light_state(frame_to_process)
+                conf_now = CONF_THRESHOLD
+                if _low_light.get("active"):
+                    conf_now = max(0.15, CONF_THRESHOLD * 0.85)
+                track_kwargs = dict(
+                    conf=conf_now,
                     imgsz=YOLO_IMGSZ,
                     classes=[0],
                     device=yolo_device,
                     verbose=False,
                 )
+                if USE_BYTETRACK:
+                    results = model.track(
+                        infer_frame, persist=True, **track_kwargs
+                    )
+                else:
+                    results = model(infer_frame, **track_kwargs)
 
                 h, w = frame_to_process.shape[:2]
-                frame_area = w * h
                 inv = (1.0 / scale) if scale > 0 else 1.0
+                known_encodings, known_names = get_face_bank()
                 candidates = []
 
                 for result in results:
-                    for box in result.boxes:
+                    boxes = result.boxes
+                    if boxes is None:
+                        continue
+                    for box in boxes:
                         x1, y1, x2, y2 = map(float, box.xyxy[0])
                         if scale != 1.0:
                             x1, y1, x2, y2 = x1 * inv, y1 * inv, x2 * inv, y2 * inv
                         x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
                         confidence = float(box.conf[0])
-                        area_ratio = max(0, (x2 - x1) * (y2 - y1)) / frame_area
-                        candidates.append((area_ratio, x1, y1, x2, y2, confidence))
+                        tid = None
+                        if getattr(box, "id", None) is not None:
+                            try:
+                                tid = int(box.id[0])
+                            except Exception:
+                                tid = None
+                        prox, _, _, _, in_roi = compute_proximity(
+                            x1, y1, x2, y2, h, w
+                        )
+                        candidates.append(
+                            (prox, in_roi, x1, y1, x2, y2, confidence, tid)
+                        )
 
-                # 只对面积最大的接近目标做人脸调度，其余复用缓存
-                primary_idx = -1
-                best_r = -1.0
-                for i, (r, *_rest) in enumerate(candidates):
-                    if r >= PROXIMITY_ALERT_THRESHOLD and r > best_r:
-                        best_r = r
-                        primary_idx = i
+                # 优先未锁定的 ROI 目标做人脸；尾随场景下锁定后下一帧轮到第二人
+                primary_idx = _select_face_index(candidates)
 
                 new_detections = []
-                for i, (area_ratio, x1, y1, x2, y2, confidence) in enumerate(candidates):
+                for i, (prox, in_roi, x1, y1, x2, y2, confidence, tid) in enumerate(
+                    candidates
+                ):
                     det = build_person_detection(
                         frame_to_process,
                         x1, y1, x2, y2,
                         confidence,
-                        frame_area,
+                        h, w,
                         known_encodings,
                         known_names,
                         run_face=(i == primary_idx),
+                        track_id=tid,
                     )
                     new_detections.append(det)
 
@@ -1889,67 +2791,80 @@ def main():
             return
 
         print("[INFO] 正在对演示图片执行 YOLO 推理...")
-        results = model(
-            frame,
+        known_encodings, known_names = get_face_bank()
+        track_kwargs = dict(
             conf=CONF_THRESHOLD,
             imgsz=YOLO_IMGSZ,
             classes=[0],
             device=yolo_device,
             verbose=False,
         )
+        if USE_BYTETRACK:
+            results = model.track(frame, persist=True, **track_kwargs)
+        else:
+            results = model(frame, **track_kwargs)
         h, w = frame.shape[:2]
-        frame_area = w * h
         demo_candidates = []
         for result in results:
-            for box in result.boxes:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            for box in boxes:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 confidence = float(box.conf[0])
-                area_ratio = max(0, (x2 - x1) * (y2 - y1)) / frame_area
-                demo_candidates.append((area_ratio, x1, y1, x2, y2, confidence))
+                tid = None
+                if getattr(box, "id", None) is not None:
+                    try:
+                        tid = int(box.id[0])
+                    except Exception:
+                        tid = None
+                prox, area_r, _, _, in_roi = compute_proximity(x1, y1, x2, y2, h, w)
+                demo_candidates.append(
+                    (prox, in_roi, area_r, x1, y1, x2, y2, confidence, tid)
+                )
 
         primary_idx = -1
-        best_r = -1.0
-        for i, (r, *_rest) in enumerate(demo_candidates):
-            if r >= PROXIMITY_ALERT_THRESHOLD and r > best_r:
-                best_r = r
+        best_p = -1.0
+        for i, (p, in_roi, *_rest) in enumerate(demo_candidates):
+            if in_roi and p >= PROXIMITY_ALERT_THRESHOLD and p > best_p:
+                best_p = p
                 primary_idx = i
 
-        for i, (_r, x1, y1, x2, y2, confidence) in enumerate(demo_candidates):
-            # 演示模式同步识别一次，确保立刻有结果
+        for i, (prox, in_roi, area_r, x1, y1, x2, y2, confidence, tid) in enumerate(
+            demo_candidates
+        ):
             if i == primary_idx:
-                det = {
-                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                    "confidence": confidence,
-                    "area_ratio": _r,
-                    "proximity_ratio": _r,
-                    "auth_status": None,
-                    "recognized_name": "",
-                    "face_distance": None,
-                    "danger_level": 0,
-                }
-                if _r >= PROXIMITY_ALERT_THRESHOLD:
+                det = build_person_detection(
+                    frame, x1, y1, x2, y2, confidence, h, w,
+                    known_encodings, known_names, run_face=False, track_id=tid,
+                )
+                if prox >= PROXIMITY_ALERT_THRESHOLD and in_roi:
                     face_result = recognize_face_in_roi(
                         frame, x1, y1, x2, y2, known_encodings, known_names
                     )
-                    det["auth_status"] = face_result.get("auth_status")
-                    det["recognized_name"] = face_result.get("recognized_name", "")
-                    det["face_distance"] = face_result.get("face_distance")
-                    det["face_similarity"] = face_result.get("face_similarity")
-                    cx, cy = _bbox_center(x1, y1, x2, y2)
-                    if face_result.get("auth_status") == AUTH_STATUS_AUTHORIZED:
-                        _update_face_cache(cx, cy, face_result)
-                    elif face_result.get("face_found"):
-                        _update_raw_face_result(cx, cy, face_result)
+                    if not face_result.get("quality_reject"):
+                        voted = _track_apply_vote(tid, face_result) if tid else None
+                        use = voted or face_result
+                        det["auth_status"] = use.get("auth_status")
+                        det["recognized_name"] = use.get("recognized_name", "")
+                        det["face_distance"] = use.get("face_distance")
+                        det["face_similarity"] = use.get("face_similarity")
+                        cx, cy = _bbox_center(x1, y1, x2, y2)
+                        if use.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+                            _update_face_cache(cx, cy, use)
+                        elif use.get("face_found"):
+                            _update_raw_face_result(cx, cy, use)
                     if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
                         det["danger_level"] = 0
                     elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
-                        det["danger_level"] = 3 if _r >= 0.3 else 2
+                        det["danger_level"] = 3 if prox >= 0.45 else 2
                 demo_detections.append(det)
             else:
                 demo_detections.append(
                     build_person_detection(
-                        frame, x1, y1, x2, y2, confidence, frame_area,
+                        frame, x1, y1, x2, y2, confidence, h, w,
                         known_encodings, known_names, run_face=False,
+                        track_id=tid,
                     )
                 )
 
@@ -1972,6 +2887,10 @@ def main():
         print("[INFO] 演示模式展示中，按 'q' 键退出...")
         while True:
             display = frame.copy()
+            draw_roi_overlay(display, alert=any(
+                d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED for d in demo_detections
+            ))
+            draw_status_hud(display)
             for det in demo_detections:
                 draw_live_detection(
                     display,
@@ -1981,6 +2900,13 @@ def main():
                     auth_status=det.get("auth_status"),
                     recognized_name=det.get("recognized_name", ""),
                     area_ratio=det.get("area_ratio", 0.0),
+                    proximity_ratio=det.get("proximity_ratio"),
+                    track_id=det.get("track_id"),
+                    dwell_sec=det.get("dwell_sec", 0.0),
+                    in_roi=det.get("in_roi", True),
+                    d_est=det.get("d_est"),
+                    distance_band_name=det.get("distance_band"),
+                    motion=det.get("motion"),
                 )
 
             if (
@@ -2020,8 +2946,8 @@ def main():
     threading.Thread(target=yolo_inference_thread, daemon=True).start()
 
     while True:
-        # 管理端新增授权人员后热加载人脸库
-        maybe_hot_reload_faces(known_encodings, known_names, face_reload_state)
+        # 管理端新增授权人员后热加载人脸库（原子替换）
+        maybe_hot_reload_faces(face_reload_state)
 
         ret, frame, is_fallback = frame_source.read()
         if not ret:
@@ -2055,45 +2981,56 @@ def main():
         # 后台人脸线程写完缓存后立刻反映到画面/上报，不必等下一轮 YOLO
         _apply_cache_to_detections(current_detections)
 
+        draw_roi_overlay(frame, alert=any(
+            d.get("in_roi") and (
+                d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED
+                or d.get("distance_band") == "DANGER"
+                or d.get("alert_type") in (ALERT_TYPE_TAILGATING, ALERT_TYPE_LOITERING)
+            )
+            for d in current_detections
+        ))
+        draw_status_hud(frame)
         primary_det = pick_primary_detection(current_detections)
         in_cooldown = (current_time - last_alert_time) < COOL_DOWN_INTERVAL
 
         if primary_det is not None:
-            # 先多帧确认（未满帧会把显示态改回识别中），再画框/上报
-            stable_auth = stabilize_auth_for_action(primary_det)
+            stabilize_auth_for_action(primary_det)
+
+        for det in current_detections:
             draw_live_detection(
                 frame,
-                primary_det["x1"], primary_det["y1"],
-                primary_det["x2"], primary_det["y2"],
-                primary_det["confidence"],
+                det["x1"], det["y1"], det["x2"], det["y2"],
+                det["confidence"],
                 in_cooldown=in_cooldown,
-                auth_status=primary_det.get("auth_status"),
-                recognized_name=primary_det.get("recognized_name", ""),
-                area_ratio=primary_det.get("area_ratio", 0.0),
+                auth_status=det.get("auth_status"),
+                recognized_name=det.get("recognized_name", ""),
+                area_ratio=det.get("area_ratio", 0.0),
+                proximity_ratio=det.get("proximity_ratio"),
+                track_id=det.get("track_id"),
+                dwell_sec=det.get("dwell_sec", 0.0),
+                in_roi=det.get("in_roi", True),
+                d_est=det.get("d_est"),
+                distance_band_name=det.get("distance_band"),
+                motion=det.get("motion"),
             )
-            if primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
-                put_cn_text(
-                    frame, "警告：未授权人员！", (50, 50), (0, 0, 255), font_size=34,
-                )
 
+        if primary_det is not None and primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
+            put_cn_text(
+                frame, "警告：未授权人员！", (50, 50), (0, 0, 255), font_size=34,
+            )
+
+        if primary_det is not None:
+            stable_auth = primary_det.get("auth_status")
             if stable_auth in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
-                primary_det["auth_status"] = stable_auth
-                if (
-                    not in_cooldown
-                    or stable_auth == AUTH_STATUS_AUTHORIZED
-                ):
+                if not in_cooldown or stable_auth == AUTH_STATUS_AUTHORIZED:
                     dispatch_detection_action(frame_clean, primary_det)
-        else:
-            for det in current_detections:
-                draw_live_detection(
-                    frame,
-                    det["x1"], det["y1"], det["x2"], det["y2"],
-                    det["confidence"],
-                    in_cooldown=True,
-                    auth_status=det.get("auth_status"),
-                    recognized_name=det.get("recognized_name", ""),
-                    area_ratio=det.get("area_ratio", 0.0),
-                )
+
+        for scene_det, scene_type in evaluate_scene_alerts(current_detections):
+            dispatch_detection_action(frame_clean, scene_det, alert_type=scene_type)
+            if scene_type == ALERT_TYPE_TAILGATING:
+                put_cn_text(frame, "警告：尾随闯入！", (50, 88), (0, 140, 255), font_size=30)
+            elif scene_type == ALERT_TYPE_LOITERING:
+                put_cn_text(frame, "警告：遮挡徘徊！", (50, 88), (180, 80, 255), font_size=30)
 
         update_stream_frame(frame)
         if not HEADLESS:

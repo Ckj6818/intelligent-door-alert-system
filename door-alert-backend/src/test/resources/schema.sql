@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS `sys_device` (
     `device_name` VARCHAR(100) NOT NULL,
     `location`    VARCHAR(200) DEFAULT NULL,
     `status`      TINYINT      NOT NULL DEFAULT 0,
+    `edge_config` VARCHAR(1000) DEFAULT NULL,
     `create_time` TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`)
 );
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS `alert_log` (
     `proximity_ratio` DOUBLE        NOT NULL DEFAULT 0,
     `danger_level`    INT           NOT NULL DEFAULT 0,
     `auth_status`     VARCHAR(20)   DEFAULT NULL,
+    `alert_type`      VARCHAR(20)   DEFAULT 'INTRUSION',
     `recognized_name` VARCHAR(100)  DEFAULT NULL,
     `status`          TINYINT       NOT NULL DEFAULT 0,
     `create_time`     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,

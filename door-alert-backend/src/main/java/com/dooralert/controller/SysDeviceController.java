@@ -4,7 +4,10 @@ import cn.dev33.satoken.annotation.SaCheckRole;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.SysDeviceDTO;
+import com.dooralert.service.DoorLockService;
 import com.dooralert.service.SysDeviceService;
+import com.dooralert.vo.DoorHeartbeatVO;
+import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +28,9 @@ public class SysDeviceController {
 
     @Autowired
     private SysDeviceService sysDeviceService;
+
+    @Autowired
+    private DoorLockService doorLockService;
 
     @Value("${device.heartbeat.timeout-seconds:30}")
     private long heartbeatTimeoutSeconds;
@@ -58,15 +64,37 @@ public class SysDeviceController {
 
     /**
      * 边缘端心跳上报（免登录，与告警 upload 同级）。
+     * 返回门锁状态与待执行电机指令，供边缘拉取远程开/上锁。
      */
     @PostMapping("/{id}/heartbeat")
-    public Result<Boolean> heartbeat(@PathVariable Long id) {
+    public Result<DoorHeartbeatVO> heartbeat(@PathVariable Long id) {
         SysDeviceVO device = sysDeviceService.getDeviceById(id);
         if (device == null) {
             return Result.error("设备不存在");
         }
         touchHeartbeat(id);
-        return Result.success(true);
+        return Result.success(doorLockService.onHeartbeat(id));
+    }
+
+    /**
+     * 读取边缘算法配置（管理端设置页）
+     */
+    @GetMapping("/{id}/edge-config")
+    public Result<EdgeConfigVO> getEdgeConfig(@PathVariable Long id) {
+        if (sysDeviceService.getDeviceById(id) == null) {
+            return Result.error("设备不存在");
+        }
+        return Result.success(sysDeviceService.getEdgeConfig(id));
+    }
+
+    /**
+     * 保存边缘算法配置。边缘端下次心跳即可热更新。
+     */
+    @PutMapping("/{id}/edge-config")
+    public Result<Boolean> updateEdgeConfig(@PathVariable Long id, @RequestBody EdgeConfigVO config) {
+        return sysDeviceService.updateEdgeConfig(id, config)
+                ? Result.success(true)
+                : Result.error("设备不存在或配置保存失败");
     }
 
     /**

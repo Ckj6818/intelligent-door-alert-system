@@ -14,12 +14,11 @@ import { getDeviceList, getAlertList, getRecycleBin, handleAlert } from '@/api/i
 import {
   mapToAlert,
   mapToLiveFeed,
-  playPassageChime,
-  playThreatAlarm,
   resolveAlertId,
   resolveAuthStatus,
   resolveAreaRatio,
 } from './utils/alertMapper';
+import { playPassageChime, playThreatAlarm } from './utils/audioFeedback';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('token') !== null);
@@ -67,6 +66,7 @@ export default function App() {
           areaRatio: raw.proximityRatio,
           authStatus: raw.authStatus,
           recognizedName: raw.recognizedName,
+          alertType: raw.alertType,
         })
       );
       setAlerts(mappedAlerts);
@@ -77,11 +77,27 @@ export default function App() {
 
     getRecycleBin().then((res: any) => {
       const list = res || [];
-      const mappedTrash: TrashItem[] = list.map((item: any) => ({
-        id: String(item.id),
-        name: `${item.deviceName || '摄像机'}_告警日志_${item.id}`,
-        deletedTime: '已删除于 ' + new Date(item.updateTime || item.createTime).toLocaleDateString(),
-      }));
+      const mappedTrash: TrashItem[] = list.map((item: any) => {
+        const auth = (item.authStatus || '').toString().toUpperCase();
+        return {
+          id: String(item.id),
+          name: `${item.deviceName || '摄像机'}_告警日志_${item.id}`,
+          deletedTime:
+            '已删除于 ' +
+            new Date(item.updateTime || item.createTime).toLocaleDateString(),
+          authStatus:
+            auth === 'AUTHORIZED' || auth === 'UNAUTHORIZED' ? auth : item.authStatus,
+          recognizedName: item.recognizedName,
+          device: item.deviceName || `监控摄像头_${item.deviceId ?? '?'}`,
+          location: item.location,
+          imageSrc: item.imageUrl || '',
+          areaRatio: item.areaRatio ?? item.proximityRatio,
+          alertLevel: item.alertLevel ?? item.dangerLevel,
+          alertType: item.alertType,
+          status: item.status === 1 ? '已处理' : '待复核',
+          statusType: item.status === 1 ? 'success' : 'error',
+        };
+      });
       setTrashItems(mappedTrash.slice(0, 24));
     }).catch((err) => {
       console.warn('Recycle bin fetch skipped or restricted:', err);

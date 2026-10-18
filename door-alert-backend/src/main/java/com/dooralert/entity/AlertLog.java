@@ -33,6 +33,10 @@ public class AlertLog {
     @TableField("auth_status")
     private String authStatus;
 
+    /** 告警子类型: INTRUSION / TAILGATING / LOITERING */
+    @TableField("alert_type")
+    private String alertType;
+
     /** 识别到的姓名（授权姓名或「未授权人员/陌生人」） */
     @TableField("recognized_name")
     private String recognizedName;

@@ -40,6 +40,9 @@ temp_capture_*
 door-alert-ai/temp_capture_*
 door-alert-ai/wheels/
 door-alert-ai/authorized_faces/.reload
+door-alert-ai/offline_cache/*
+!door-alert-ai/offline_cache/.gitkeep
+door-alert-ai/benchmark_report.csv
 _defense_extract/
 
 # Image & Media Files (protect personal photos and privacy)
@@ -61,3 +64,4 @@ uploads/
 uploads/*
 door-alert-backend/uploads/
 door-alert-backend/uploads/*
+!door-alert-backend/uploads/.gitkeep

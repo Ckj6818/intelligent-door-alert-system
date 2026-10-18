@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.dooralert.dto.SysDeviceDTO;
 import com.dooralert.entity.SysDevice;
+import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
 
 public interface SysDeviceService extends IService<SysDevice> {
@@ -15,4 +16,8 @@ public interface SysDeviceService extends IService<SysDevice> {
     boolean addDevice(SysDeviceDTO dto);
 
     boolean updateDevice(Long id, SysDeviceDTO dto);
+
+    EdgeConfigVO getEdgeConfig(Long deviceId);
+
+    boolean updateEdgeConfig(Long deviceId, EdgeConfigVO config);
 }

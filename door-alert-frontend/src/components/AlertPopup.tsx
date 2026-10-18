@@ -18,19 +18,31 @@ export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: Ale
   const name = alert?.recognizedName || '未授权人员/陌生人';
   const areaPct = Math.round(((alert?.areaRatio ?? alert?.confidence) || 0) * 1000) / 10;
   const imageSrc = alert?.imageSrc || '';
+  const alertType = (alert?.alertType || 'INTRUSION').toUpperCase();
+  const headline = alertType === 'TAILGATING'
+    ? '警告：尾随闯入，授权人员身后有未授权目标！'
+    : alertType === 'LOITERING'
+      ? '警告：门前遮挡徘徊超时！'
+      : '警告：非授权人员/陌生人靠近门禁防区！';
+  const tone = alertType === 'TAILGATING' ? 'text-amber-300' : alertType === 'LOITERING' ? 'text-fuchsia-300' : 'text-cyber-error';
+  const border = alertType === 'TAILGATING'
+    ? 'border-amber-400/70'
+    : alertType === 'LOITERING'
+      ? 'border-fuchsia-400/70'
+      : 'border-cyber-error/70';
 
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       {/* 扫描线氛围 */}
       <div className="absolute inset-0 pointer-events-none opacity-20 scan-line" />
 
-      <div className="relative w-full max-w-xl glass-panel border-2 border-cyber-error/70 rounded-xl overflow-hidden shadow-[0_0_60px_rgba(255,85,85,0.35)] animate-in zoom-in-95 duration-300">
+      <div className={`relative w-full max-w-xl glass-panel border-2 ${border} rounded-xl overflow-hidden shadow-[0_0_60px_rgba(255,85,85,0.35)] animate-in zoom-in-95 duration-300`}>
         {/* 顶栏 */}
         <div className="bg-cyber-error/20 px-5 py-3.5 flex items-center justify-between border-b border-cyber-error/40">
-          <div className="flex items-center gap-2 text-cyber-error font-bold text-sm tracking-wide animate-pulse">
+          <div className={`flex items-center gap-2 ${tone} font-bold text-sm tracking-wide animate-pulse`}>
             <span aria-hidden>🔴</span>
             <AlertTriangle className="w-5 h-5" />
-            <span>警告：非授权人员/陌生人靠近门禁防区！</span>
+            <span>{headline}</span>
           </div>
           <button
             type="button"
@@ -58,7 +70,7 @@ export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: Ale
             )}
             <div className="absolute inset-0 border-2 border-cyber-error/25 pointer-events-none" />
             <div className="absolute top-2 left-2 bg-cyber-error text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wider">
-              UNAUTHORIZED
+              {alertType}
             </div>
           </div>
 
@@ -70,7 +82,7 @@ export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: Ale
                   识别结果
                 </p>
                 <p className="text-lg text-on-surface font-bold">{name}</p>
-                <p className="text-xs text-cyber-error/90 mt-1 font-mono">authStatus = UNAUTHORIZED</p>
+                <p className={`text-xs mt-1 font-mono ${tone}`}>alertType = {alertType}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -95,7 +107,11 @@ export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: Ale
               </div>
 
               <p className="text-[11px] text-on-surface-variant leading-relaxed">
-                边缘节点已完成人脸比对，目标未命中授权白名单。请立即确认是否为误报，或派单安保处置。
+                {alertType === 'TAILGATING'
+                  ? '警戒区内同时出现已授权人员与未授权目标，判定为尾随闯入。'
+                  : alertType === 'LOITERING'
+                    ? '目标在门前滞留超时且始终没有合格正脸，判定为遮挡或恶意徘徊。'
+                    : '边缘节点已完成人脸比对，目标未命中授权白名单。请立即确认是否为误报，或派单安保处置。'}
               </p>
             </div>
 
