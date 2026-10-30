@@ -242,37 +242,6 @@ export function deleteAuthorizedUser(id: number): Promise<any> {
   });
 }
 
-/**
- * 查询设备门锁/电机状态
- */
-export function getDoorStatus(deviceId = 1): Promise<any> {
-  return request({
-    url: `/devices/${deviceId}/door`,
-    method: 'get',
-  });
-}
-
-/**
- * 远程开锁（下发边缘电机指令）
- */
-export function remoteUnlockDoor(deviceId = 1, holdSeconds?: number): Promise<any> {
-  return request({
-    url: `/devices/${deviceId}/door/unlock`,
-    method: 'post',
-    params: holdSeconds ? { holdSeconds } : undefined,
-  });
-}
-
-/**
- * 远程上锁
- */
-export function remoteLockDoor(deviceId = 1): Promise<any> {
-  return request({
-    url: `/devices/${deviceId}/door/lock`,
-    method: 'post',
-  });
-}
-
 export function getEdgeConfig(deviceId = 1): Promise<any> {
   return request({
     url: `/devices/${deviceId}/edge-config`,

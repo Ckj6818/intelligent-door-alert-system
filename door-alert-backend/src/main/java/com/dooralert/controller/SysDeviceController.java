@@ -4,12 +4,12 @@ import cn.dev33.satoken.annotation.SaCheckRole;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.SysDeviceDTO;
-import com.dooralert.service.DoorLockService;
 import com.dooralert.service.SysDeviceService;
 import com.dooralert.vo.DoorHeartbeatVO;
 import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
 import jakarta.validation.Valid;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
@@ -19,6 +19,7 @@ import java.util.Map;
 /**
  * 设备管理接口
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/devices")
 public class SysDeviceController {
@@ -28,9 +29,6 @@ public class SysDeviceController {
 
     @Autowired
     private SysDeviceService sysDeviceService;
-
-    @Autowired
-    private DoorLockService doorLockService;
 
     @Value("${device.heartbeat.timeout-seconds:30}")
     private long heartbeatTimeoutSeconds;
@@ -64,7 +62,7 @@ public class SysDeviceController {
 
     /**
      * 边缘端心跳上报（免登录，与告警 upload 同级）。
-     * 返回门锁状态与待执行电机指令，供边缘拉取远程开/上锁。
+     * 返回在线确认及边缘算法配置，供边缘端热更新。
      */
     @PostMapping("/{id}/heartbeat")
     public Result<DoorHeartbeatVO> heartbeat(@PathVariable Long id) {
@@ -73,7 +71,19 @@ public class SysDeviceController {
             return Result.error("设备不存在");
         }
         touchHeartbeat(id);
-        return Result.success(doorLockService.onHeartbeat(id));
+        EdgeConfigVO edgeConfig = new EdgeConfigVO();
+        try {
+            EdgeConfigVO loaded = sysDeviceService.getEdgeConfig(id);
+            if (loaded != null) {
+                edgeConfig = loaded;
+            }
+        } catch (Exception e) {
+            log.warn("读取边缘配置失败 deviceId={}: {}", id, e.getMessage());
+        }
+        return Result.success(DoorHeartbeatVO.builder()
+                .online(true)
+                .edgeConfig(edgeConfig)
+                .build());
     }
 
     /**

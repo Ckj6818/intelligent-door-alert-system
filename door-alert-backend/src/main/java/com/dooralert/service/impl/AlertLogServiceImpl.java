@@ -9,7 +9,6 @@ import com.dooralert.entity.AlertLog;
 import com.dooralert.entity.PassageLog;
 import com.dooralert.mapper.AlertLogMapper;
 import com.dooralert.service.AlertLogService;
-import com.dooralert.service.DoorLockService;
 import com.dooralert.service.PassageLogService;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
@@ -34,9 +33,6 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Autowired
     private PassageLogService passageLogService;
-
-    @Autowired
-    private DoorLockService doorLockService;
 
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
@@ -157,18 +153,6 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         }
 
         log.info("授权通行日志已记录: id={}, name={}", passage.getId(), recognizedName);
-
-        // 授权通行 → 联动门锁/电机自动开锁
-        try {
-            doorLockService.unlock(
-                    dto.getDeviceId(),
-                    DoorLockServiceImpl.SRC_AUTO_FACE,
-                    recognizedName,
-                    null
-            );
-        } catch (Exception e) {
-            log.warn("授权通行联动开锁失败 deviceId={}: {}", dto.getDeviceId(), e.getMessage());
-        }
 
         return AlertWsPayload.builder()
                 .alertId(passage.getId())

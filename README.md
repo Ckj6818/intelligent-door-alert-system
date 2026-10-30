@@ -31,7 +31,7 @@
 | 模块 | 核心职责 | 关键技术 |
 |:---|:---|:---|
 | **边缘 AI 节点** (`door-alert-ai`) | 视频流采集、暗光增强、行人检测与跟踪、透视距离与接近度门控、多目标并发人脸比对、离线缓存、MJPEG 实时流与 `/health` 遥测服务 | `YOLOv8` + `ByteTrack`、`YuNet` + `SFace`、`CLAHE`、`ThreadPool` |
-| **云端业务后端** (`door-alert-backend`) | 告警与授权通行落库、WebSocket 实时广播、心跳监测与边缘参数热下发、远程门锁控制、白名单同步、工单流转与 EasyExcel 报表导出 | `Spring Boot 3.2`、`MyBatis-Plus`、`Sa-Token`、`WebSocket`、`MySQL 8` |
+| **云端业务后端** (`door-alert-backend`) | 告警与授权通行落库、WebSocket 实时广播、心跳监测与边缘参数热下发、白名单同步、工单流转与 EasyExcel 报表导出 | `Spring Boot 3.2`、`MyBatis-Plus`、`Sa-Token`、`WebSocket`、`MySQL 8` |
 | **安防可视化大屏** (`door-alert-frontend`) | 同源嵌入 MJPEG 实时检测流、动态渲染 AI 推理遥测曲线（FPS / 延迟）、分级声光告警弹窗、告警工单闭环、授权人脸管理、回收站与审计中心 | `React 19`、`TypeScript`、`Vite 6`、`Tailwind CSS 4`、`Web Audio API` |
 
 ---
@@ -66,7 +66,7 @@
   - `TAILGATING`：授权人员通行后短时间窗口内陌生人尾随闯入告警
   - `LOITERING`：门前防区长时间遮挡徘徊超时告警
 - **CLAHE 自适应暗光增强**：夜间或背光走廊自动启用 LAB 空间亮度自适应均衡并动态补偿检测阈值。
-- **断网 FIFO 离线缓存与云边热同步**：后端断联时抓拍与元数据自动落盘队列，网络恢复后按序补传；心跳响应实时热更新冷却窗口、人脸阈值、危险距离与门锁状态。
+- **断网 FIFO 离线缓存与云边热同步**：后端断联时抓拍与元数据自动落盘队列，网络恢复后按序补传；心跳响应实时热更新冷却窗口、人脸阈值与危险距离。
 
 </td>
 <td width="50%" valign="top">
@@ -125,7 +125,7 @@ flowchart LR
 
   Judge -- "HTTP Session 内存流上传" --> API
   Cache -. "网络恢复自动补传" .-> API
-  Edge <-- "心跳上报 / 阈值与门锁热下发" --> API
+  Edge <-- "心跳上报 / 阈值参数热下发" --> API
   Stream -- "同源嵌入 <img> & 遥测轮询" --> Live
   WS -- "毫秒级推送告警/通行事件" --> Popup
   WS --> Workflow
@@ -161,7 +161,7 @@ sequenceDiagram
   end
   loop 每 10 秒心跳同步
     E->>B: POST /api/devices/{id}/heartbeat
-    B-->>E: 返回最新 edgeConfig (阈值/冷却/距离) + 远程门锁指令
+    B-->>E: 返回最新 edgeConfig (阈值/冷却/距离/尾随开关)
   end
 ```
 
@@ -297,7 +297,7 @@ cd door-alert-ai && python -u doorAlert.py
 | `GET` | `/api/alerts/access-compare` | 授权通行与未授权入侵对比统计 |
 | `DELETE` | `/api/alerts/recycle/clear` | 永久清空告警回收站并同步删除磁盘抓拍图片 |
 | `GET` | `/api/alerts/export` | 导出告警记录 Excel 报表（`.xlsx`） |
-| `POST` | `/api/devices/{id}/heartbeat` | 边缘设备心跳上报，返回最新 `edgeConfig` 与远程门锁指令 |
+| `POST` | `/api/devices/{id}/heartbeat` | 边缘设备心跳上报，返回在线确认与最新 `edgeConfig` 算法参数 |
 | `GET/POST` | `/api/authorized-persons` | 授权人员白名单管理（新增/删除后自动写入 `.reload` 触发边缘端原子热重载） |
 | `WS` | `/ws/alerts` | WebSocket 实时推送告警与通行事件 |
 

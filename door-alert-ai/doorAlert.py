@@ -2238,7 +2238,7 @@ def start_mjpeg_server():
 
 
 def send_heartbeat():
-    """向云端上报设备存活心跳，并应用下发的 edgeConfig（保留门锁指令字段）。"""
+    """向云端上报设备存活心跳，并应用下发的 edgeConfig。"""
     try:
         response = _http.post(BACKEND_HEARTBEAT_URL, timeout=1.5)
         if response.status_code == 200:
@@ -2246,16 +2246,8 @@ def send_heartbeat():
                 res_json = response.json()
                 if res_json.get("code") == 200:
                     data = res_json.get("data") or {}
-                    if isinstance(data, dict):
-                        if data.get("edgeConfig"):
-                            apply_edge_config(data.get("edgeConfig"))
-                        cmd = data.get("doorCommand")
-                        if cmd:
-                            print(
-                                f"[{datetime.now().strftime('%H:%M:%S')}] "
-                                f"心跳携带门锁指令 doorCommand={cmd} "
-                                f"doorStatus={data.get('doorStatus')}"
-                            )
+                    if isinstance(data, dict) and data.get("edgeConfig"):
+                        apply_edge_config(data.get("edgeConfig"))
                     print(
                         f"[{datetime.now().strftime('%H:%M:%S')}] "
                         f"心跳上报成功 deviceId={DEVICE_ID}"
@@ -2363,7 +2355,7 @@ def log_authorized_passage(frame_clean, det):
         0,
         AUTH_STATUS_AUTHORIZED,
         det.get("recognized_name", ""),
-        ALERT_TYPE_INTRUSION,
+        "PASSAGE",
     )
 
 
@@ -2935,14 +2927,15 @@ def _warmup_models(model, yolo_device, use_half=False):
     t0 = time.perf_counter()
     try:
         dummy = np.zeros((YOLO_IMGSZ, YOLO_IMGSZ, 3), dtype=np.uint8)
-        model.predict(
-            dummy,
+        warm_kwargs = dict(
             imgsz=YOLO_IMGSZ,
             device=yolo_device,
-            half=use_half,
             classes=[0],
             verbose=False,
         )
+        if use_half:
+            warm_kwargs["half"] = True
+        model.predict(dummy, **warm_kwargs)
     except Exception as exc:
         print(f"[WARN] YOLO 预热跳过: {exc}")
 
@@ -3081,9 +3074,10 @@ def main():
                     imgsz=YOLO_IMGSZ,
                     classes=[0],
                     device=yolo_device,
-                    half=use_half,
                     verbose=False,
                 )
+                if use_half:
+                    track_kwargs["half"] = True
                 if USE_BYTETRACK:
                     results = model.track(
                         infer_frame, persist=True, **track_kwargs
