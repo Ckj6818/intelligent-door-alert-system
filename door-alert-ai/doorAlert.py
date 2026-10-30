@@ -26,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 import requests
+from concurrent.futures import ThreadPoolExecutor
+from requests.adapters import HTTPAdapter
 from ultralytics import YOLO
 
 try:
@@ -113,10 +115,19 @@ def _resolve_cn_font(size=22):
     return None
 
 
-def put_cn_text(img, text, org, color=(255, 255, 255), font_size=22, thickness=2):
+def put_cn_text(
+    img,
+    text,
+    org,
+    color=(255, 255, 255),
+    font_size=22,
+    thickness=2,
+    bg_color=None,
+    bg_alpha=0.68,
+):
     """
-    在 BGR 图上绘制中文/英文混排文字。
-    color 为 OpenCV BGR；失败时回退 cv2.putText（仅 ASCII 可见）。
+    在 BGR 图上绘制高对比度中英文混排文字（支持描边与半透明底衬，精确定位防越界重叠）。
+    org=(x, y) 中 x 为文字左边界，y 为文字底部基线（与 OpenCV putText 一致）。
     """
     if not text:
         return img
@@ -128,13 +139,61 @@ def put_cn_text(img, text, org, color=(255, 255, 255), font_size=22, thickness=2
             cv2.FONT_HERSHEY_SIMPLEX, max(0.4, font_size / 32.0), color, thickness,
         )
         return img
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    draw = ImageDraw.Draw(pil_img)
-    # PIL 用 RGB；基线约在文字底部，与 OpenCV putText 习惯对齐
+    text = str(text)
+    ih, iw = img.shape[:2]
+    stroke_w = max(1, int(round(thickness * 0.7)))
+    try:
+        l, t, r, b = font.getbbox(text, stroke_width=stroke_w)
+    except TypeError:
+        try:
+            l, t, r, b = font.getbbox(text)
+        except Exception:
+            l, t, r, b = 0, 0, int(font_size * len(text)), int(font_size * 1.3)
+    except Exception:
+        l, t, r, b = 0, 0, int(font_size * len(text)), int(font_size * 1.3)
+
+    tw = max(1, int(r - l))
+    th = max(1, int(b - t))
+    pad_x = 6 if bg_color is not None else (stroke_w + 2)
+    pad_y = 4 if bg_color is not None else (stroke_w + 2)
+
+    # 限制在画面内，防止贴边时裁切或越界
+    vx1 = max(pad_x, min(x, max(pad_x, iw - tw - pad_x)))
+    vy2 = max(th + pad_y, min(y, max(th + pad_y, ih - pad_y)))
+    vy1 = vy2 - th
+    vx2 = vx1 + tw
+
+    rx1 = max(0, vx1 - pad_x)
+    ry1 = max(0, vy1 - pad_y)
+    rx2 = min(iw, vx2 + pad_x)
+    ry2 = min(ih, vy2 + pad_y)
+    if rx2 <= rx1 or ry2 <= ry1:
+        return img
+
+    patch = img[ry1:ry2, rx1:rx2]
+    if bg_color is not None:
+        bg_patch = np.empty_like(patch)
+        bg_patch[:, :] = (int(bg_color[0]), int(bg_color[1]), int(bg_color[2]))
+        cv2.addWeighted(bg_patch, float(bg_alpha), patch, 1.0 - float(bg_alpha), 0, patch)
+
+    pil_patch = Image.fromarray(cv2.cvtColor(patch, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_patch)
     fill = (int(color[2]), int(color[1]), int(color[0]))
-    draw.text((x, max(0, y - font_size)), str(text), font=font, fill=fill)
-    img[:, :] = cv2.cvtColor(np.asarray(pil_img), cv2.COLOR_RGB2BGR)
+    dx = (vx1 - rx1) - int(l)
+    dy = (vy1 - ry1) - int(t)
+    try:
+        draw.text(
+            (dx, dy),
+            text,
+            font=font,
+            fill=fill,
+            stroke_width=stroke_w,
+            stroke_fill=(12, 14, 18),
+        )
+    except TypeError:
+        draw.text((dx + 1, dy + 1), text, font=font, fill=(12, 14, 18))
+        draw.text((dx, dy), text, font=font, fill=fill)
+    img[ry1:ry2, rx1:rx2] = cv2.cvtColor(np.asarray(pil_patch), cv2.COLOR_RGB2BGR)
     return img
 
 # ================= 全局配置项 =================
@@ -242,9 +301,55 @@ FACE_REJECT_DISTANCE = float(os.environ.get("FACE_REJECT_DISTANCE", "0.70"))
 UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "3"))
 AUTH_CONFIRM_FRAMES = int(os.environ.get("AUTH_CONFIRM_FRAMES", "2"))
 
-_yunet_detector = None
-_yunet_input_size = (0, 0)
-_sface_recognizer = None
+# ================= 性能优化项 =================
+# GPU 下 YOLO 半精度推理（默认关闭以避免旧版 ultralytics 每帧打印 half 弃用警告；可设 YOLO_HALF=1 开启）
+YOLO_HALF = os.environ.get("YOLO_HALF", "0").strip() in ("1", "true", "yes")
+# 启动预热：避免第一个行人出现时首帧卡顿
+MODEL_WARMUP = os.environ.get("MODEL_WARMUP", "1").strip() in ("1", "true", "yes")
+# 人脸识别并发数（多人同框 / 尾随场景下同时识别前 N 个目标）
+FACE_MAX_WORKERS = max(1, int(os.environ.get("FACE_MAX_WORKERS", "2")))
+# 检测框 EMA 平滑系数（0 关闭；越大越跟手，越小越平稳）
+BOX_EMA_ALPHA = float(os.environ.get("BOX_EMA_ALPHA", "0.6"))
+# 底库照片 YuNet 检测前的最大边长（证件照 / 大图先缩放）
+BANK_DETECT_MAX_SIDE = int(os.environ.get("BANK_DETECT_MAX_SIDE", "640"))
+
+# 复用 TCP 连接（Keep-Alive），心跳与告警上报不再每次三次握手
+_http = requests.Session()
+_http.mount("http://", HTTPAdapter(pool_connections=4, pool_maxsize=8))
+_http.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=8))
+
+# 实时遥测（/health 返回，供管理端绘制真实 FPS / 推理耗时）
+_telemetry_lock = threading.Lock()
+_telemetry = {
+    "fps": 0.0,
+    "yolo_ms": 0.0,
+    "face_ms": 0.0,
+    "persons": 0,
+    "device": "",
+    "engine": "",
+    "half": False,
+    "face_bank": 0,
+    "low_light": False,
+    "updated_at": 0.0,
+}
+
+
+def update_telemetry(**kwargs):
+    with _telemetry_lock:
+        _telemetry.update(kwargs)
+        _telemetry["updated_at"] = time.time()
+
+
+def _ema(prev, value, alpha=0.3):
+    """遥测数值指数平滑，曲线不抖。"""
+    if not prev:
+        return float(value)
+    return float(prev) * (1.0 - alpha) + float(value) * alpha
+
+
+# OpenCV DNN 模型非线程安全：每个线程持有独立的 YuNet / SFace 实例
+_model_tls = threading.local()
+
 # sface | dlib；启动时按模型可用性自动选择
 FACE_ENGINE = "dlib"
 
@@ -254,7 +359,7 @@ UNAUTHORIZED_DISPLAY_NAME = "未授权人员/陌生人"
 
 # 白名单原子引用（热加载时整表替换，禁止 clear+extend 竞态）
 _face_bank_lock = threading.Lock()
-_face_bank = {"encodings": [], "names": []}
+_face_bank = {"encodings": np.zeros((0, 0), dtype=np.float32), "names": []}
 
 # ByteTrack 轨迹元数据：track_id -> 首次出现/滞留/身份投票
 _track_lock = threading.Lock()
@@ -331,17 +436,34 @@ def _parse_roi_polygon(raw):
 ALERT_ROI_POLYGON = _parse_roi_polygon(_ROI_POLY_RAW)
 
 
+def _build_bank_matrix(encodings):
+    """
+    白名单特征 → 连续 float32 矩阵。
+    SFace 预先 L2 归一化，比对时只需一次矩阵乘 known @ vec 即得余弦相似度。
+    """
+    if encodings is None or len(encodings) == 0:
+        return np.zeros((0, 0), dtype=np.float32)
+    mat = np.ascontiguousarray(np.asarray(encodings, dtype=np.float32).reshape(len(encodings), -1))
+    if FACE_ENGINE == "sface":
+        norms = np.linalg.norm(mat, axis=1, keepdims=True)
+        mat = mat / np.maximum(norms, 1e-8)
+    return mat
+
+
 def get_face_bank():
-    """返回当前白名单快照（list 引用在锁内读取）。"""
+    """返回当前白名单快照 (matrix, names)；引用在锁内读取，替换为原子操作。"""
     with _face_bank_lock:
         return _face_bank["encodings"], _face_bank["names"]
 
 
 def set_face_bank(encodings, names):
-    """原子替换白名单引用，避免热加载清空瞬间后台读到空表。"""
+    """在锁外构建新矩阵，再原子替换引用，避免热加载瞬间后台读到空表。"""
+    mat = _build_bank_matrix(encodings)
+    new_names = list(names)
     with _face_bank_lock:
-        _face_bank["encodings"] = list(encodings)
-        _face_bank["names"] = list(names)
+        _face_bank["encodings"] = mat
+        _face_bank["names"] = new_names
+    update_telemetry(face_bank=len(set(new_names)))
 
 
 def compute_proximity(x1, y1, x2, y2, frame_h, frame_w):
@@ -601,10 +723,17 @@ _face_cache = {
     "face_similarity": None,
 }
 _face_job_lock = threading.Lock()
+# inflight: 正在识别的目标键（track_id 或 "pos"）；last_submit: 每个目标上次提交时间
 _face_job = {
-    "busy": False,
-    "last_submit": 0.0,
+    "inflight": set(),
+    "last_submit": {},
 }
+# 人脸识别线程池：复用线程，避免每次识别都新建 OS 线程；支持多人并发识别
+_face_executor = ThreadPoolExecutor(
+    max_workers=FACE_MAX_WORKERS, thread_name_prefix="face"
+)
+# 告警 / 通行上报线程池
+_upload_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="upload")
 _last_noface_log = 0.0
 
 # 多帧确认：按「新的识别结果」累计，禁止主循环同帧重复加分
@@ -662,22 +791,39 @@ def _resolve_face_engine():
     return FACE_ENGINE
 
 
+def _resize_max_side(bgr, max_side):
+    h, w = bgr.shape[:2]
+    side = max(h, w)
+    if max_side <= 0 or side <= max_side:
+        return bgr
+    scale = max_side / float(side)
+    return cv2.resize(
+        bgr, (max(1, int(w * scale)), max(1, int(h * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
 def _encoding_from_bgr(bgr, face_recognition=None):
     """
-    与实时 recognize_face_in_roi 同一路径：头肩 ROI → YuNet → 特征。
-    底库与摄像头必须走同一套，否则同人距离会虚高。
+    底库照片 → 特征向量。
+
+    底库一般是单人证件照 / 大头照：优先在「整张图」上跑 YuNet。
+    旧实现先套用实时流的「人体框上 60%」裁剪，大头照会被裁掉嘴和下巴，
+    导致关键点偏移、同人相似度偏低。整图检测失败时才回退头肩 ROI 裁剪
+    （适用于上传的是全身照的情况）。SFace 会按 5 点关键点 alignCrop
+    到 112x112，因此与实时流的特征空间一致。
     """
     if bgr is None or bgr.size == 0:
         return None
-    h, w = bgr.shape[:2]
-    roi = _crop_face_roi(bgr, 0, 0, w, h)
-    if roi is None:
-        roi = bgr
+    full = _resize_max_side(bgr, BANK_DETECT_MAX_SIDE)
+    h, w = full.shape[:2]
 
     if FACE_ENGINE == "sface" or _get_sface_recognizer() is not None:
-        feat = _sface_feature_from_bgr(roi)
+        feat = _sface_feature_from_bgr(full)
         if feat is None:
-            feat = _sface_feature_from_bgr(bgr)
+            roi = _crop_face_roi(full, 0, 0, w, h)
+            if roi is not None:
+                feat = _sface_feature_from_bgr(roi)
         return feat
 
     if face_recognition is None:
@@ -685,11 +831,14 @@ def _encoding_from_bgr(bgr, face_recognition=None):
             import face_recognition as face_recognition
         except ImportError:
             return None
-    locs = _yunet_face_locations(roi)
+    roi = full
+    locs = _yunet_face_locations(full)
     if not locs:
-        locs = _yunet_face_locations(bgr)
-        if locs:
-            roi = bgr
+        crop = _crop_face_roi(full, 0, 0, w, h)
+        if crop is not None:
+            locs = _yunet_face_locations(crop)
+            if locs:
+                roi = crop
     if not locs:
         return None
     rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
@@ -842,11 +991,11 @@ def _update_face_cache(cx, cy, result, *, allow_unauth=False):
         _face_cache["face_similarity"] = result.get("face_similarity")
 
 
-def _update_raw_face_result(cx, cy, result):
-    """写入短时原始比对结果，并按新样本累计确认 streak。"""
+def _update_raw_face_result(cx, cy, result, track_id=None, note=True):
+    """写入短时原始比对结果，并按新样本累计确认 streak（有 track_id 时按轨迹独立累计）。"""
     if not result or not result.get("face_found"):
         return
-    ts = time.time()
+    ts = float(result.get("result_ts") or time.time())
     result = dict(result)
     result["result_ts"] = ts
     with _raw_face_lock:
@@ -858,7 +1007,37 @@ def _update_raw_face_result(cx, cy, result):
         _raw_face["face_distance"] = result.get("face_distance")
         _raw_face["face_similarity"] = result.get("face_similarity")
         _raw_face["face_found"] = True
-    _note_face_sample(cx, cy, result)
+    if track_id is not None:
+        with _track_lock:
+            meta = _track_meta.get(track_id)
+            if meta is not None:
+                meta["raw"] = {
+                    "auth_status": result.get("auth_status"),
+                    "recognized_name": result.get("recognized_name", ""),
+                    "face_distance": result.get("face_distance"),
+                    "face_similarity": result.get("face_similarity"),
+                    "ts": ts,
+                }
+    if note:
+        _note_face_sample(cx, cy, result, track_id=track_id)
+
+
+def _track_raw_hit(track_id, now):
+    """按轨迹取最近一次原始比对结果（多人同框时不会被另一个人覆盖）。"""
+    if track_id is None:
+        return None
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        raw = meta.get("raw") if meta else None
+        if not raw or now - raw.get("ts", 0.0) > _RAW_FACE_TTL:
+            return None
+        return {
+            "auth_status": raw.get("auth_status"),
+            "recognized_name": raw.get("recognized_name", ""),
+            "face_distance": raw.get("face_distance"),
+            "face_similarity": raw.get("face_similarity"),
+            "from_confirmed_cache": False,
+        }
 
 
 def _raw_face_hit(cx, cy, now):
@@ -897,12 +1076,18 @@ def _apply_cache_to_detections(detections):
             continue
         if det.get("auth_status") in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
             continue
-        cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
-        cached = _cache_hit(cx, cy, now)
-        from_confirmed = cached is not None
-        if cached is None:
-            cached = _raw_face_hit(cx, cy, now)
+        tid = det.get("track_id")
+        if tid is not None:
+            # 有轨迹：只信任本轨迹的结果，避免把旁边授权人员的身份「借」给陌生人
+            cached = _track_raw_hit(tid, now)
             from_confirmed = False
+        else:
+            cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
+            cached = _cache_hit(cx, cy, now)
+            from_confirmed = cached is not None
+            if cached is None:
+                cached = _raw_face_hit(cx, cy, now)
+                from_confirmed = False
         if cached is None:
             continue
         det["auth_status"] = cached["auth_status"]
@@ -929,43 +1114,67 @@ def _confirm_same_target(cx, cy):
     _confirm_state["cy"] = cy
 
 
-def _note_face_sample(cx, cy, result):
+def _apply_streak_sample(state, result, sample_ts):
+    """对一个 streak 状态（全局或某条轨迹）累计一次新样本。"""
+    if sample_ts <= state.get("last_sample_ts", 0.0):
+        return
+    state["last_sample_ts"] = sample_ts
+    if result.get("quality_reject"):
+        state["unauth_streak"] = 0
+        return
+    auth = result.get("auth_status")
+    if auth == AUTH_STATUS_AUTHORIZED:
+        sim = result.get("face_similarity")
+        strong = (
+            FACE_ENGINE == "sface"
+            and isinstance(sim, (int, float))
+            and float(sim) >= SFACE_STRONG_AUTH
+        )
+        state["unauth_streak"] = 0
+        if strong:
+            state["auth_streak"] = AUTH_CONFIRM_FRAMES
+        else:
+            state["auth_streak"] = state.get("auth_streak", 0) + 1
+    elif auth == AUTH_STATUS_UNAUTHORIZED:
+        state["auth_streak"] = 0
+        state["unauth_streak"] = state.get("unauth_streak", 0) + 1
+    else:
+        # 识别中：打断累计
+        state["unauth_streak"] = 0
+        state["auth_streak"] = 0
+
+
+def _note_face_sample(cx, cy, result, track_id=None):
     """
     仅在每次新的识别结果上累计 streak（由人脸线程调用）。
     禁止主循环对同一结果反复 +1。
     质量拒绝帧：打断未授权累计，不记为陌生人。
+    有 track_id 时按轨迹独立累计，避免多人并发识别时样本互相串扰。
     """
     if not result or not result.get("face_found"):
         return
     sample_ts = float(result.get("result_ts") or time.time())
-    auth = result.get("auth_status")
+    if track_id is not None:
+        with _track_lock:
+            meta = _track_meta.get(track_id)
+            if meta is not None:
+                _apply_streak_sample(meta.setdefault("streak", {}), result, sample_ts)
+                return
     with _confirm_lock:
         _confirm_same_target(cx, cy)
-        if sample_ts <= _confirm_state["last_sample_ts"]:
-            return
-        _confirm_state["last_sample_ts"] = sample_ts
-        if result.get("quality_reject"):
-            _confirm_state["unauth_streak"] = 0
-            return
-        if auth == AUTH_STATUS_AUTHORIZED:
-            sim = result.get("face_similarity")
-            strong = (
-                FACE_ENGINE == "sface"
-                and isinstance(sim, (int, float))
-                and float(sim) >= SFACE_STRONG_AUTH
-            )
-            _confirm_state["unauth_streak"] = 0
-            if strong:
-                _confirm_state["auth_streak"] = AUTH_CONFIRM_FRAMES
-            else:
-                _confirm_state["auth_streak"] += 1
-        elif auth == AUTH_STATUS_UNAUTHORIZED:
-            _confirm_state["auth_streak"] = 0
-            _confirm_state["unauth_streak"] += 1
-        else:
-            # 识别中：打断未授权累计
-            _confirm_state["unauth_streak"] = 0
-            _confirm_state["auth_streak"] = 0
+        _apply_streak_sample(_confirm_state, result, sample_ts)
+
+
+def _get_streaks(track_id):
+    """返回 (auth_streak, unauth_streak)；有轨迹用轨迹的，否则用全局位置版。"""
+    if track_id is not None:
+        with _track_lock:
+            meta = _track_meta.get(track_id)
+            if meta is not None:
+                st = meta.get("streak") or {}
+                return st.get("auth_streak", 0), st.get("unauth_streak", 0)
+    with _confirm_lock:
+        return _confirm_state["auth_streak"], _confirm_state["unauth_streak"]
 
 
 def stabilize_auth_for_action(det):
@@ -992,9 +1201,9 @@ def stabilize_auth_for_action(det):
             and isinstance(sim, (int, float))
             and float(sim) >= SFACE_STRONG_AUTH
         )
-        with _confirm_lock:
-            streak = _confirm_state["auth_streak"]
-        if streak >= AUTH_CONFIRM_FRAMES or strong:
+        with_track = det.get("track_id")
+        auth_streak, _ = _get_streaks(with_track)
+        if auth_streak >= AUTH_CONFIRM_FRAMES or strong:
             _update_face_cache(
                 cx,
                 cy,
@@ -1011,9 +1220,8 @@ def stabilize_auth_for_action(det):
         return None
 
     if auth == AUTH_STATUS_UNAUTHORIZED:
-        with _confirm_lock:
-            streak = _confirm_state["unauth_streak"]
-        if streak >= UNAUTH_CONFIRM_FRAMES:
+        _, unauth_streak = _get_streaks(det.get("track_id"))
+        if unauth_streak >= UNAUTH_CONFIRM_FRAMES:
             _update_face_cache(
                 cx,
                 cy,
@@ -1075,13 +1283,16 @@ def _crop_face_roi(frame_bgr, x1, y1, x2, y2):
 
 
 def _get_yunet_detector(input_w, input_h):
-    """OpenCV 5 YuNet 人脸检测器（比 dlib HOG 快一个数量级）。"""
-    global _yunet_detector, _yunet_input_size
+    """
+    OpenCV YuNet 人脸检测器（比 dlib HOG 快一个数量级）。
+    线程局部实例：多个人脸工作线程并发时互不干扰 setInputSize / forward。
+    """
     if not os.path.isfile(YUNET_MODEL_PATH):
         return None
-    if _yunet_detector is None:
+    detector = getattr(_model_tls, "yunet", None)
+    if detector is None:
         try:
-            _yunet_detector = cv2.FaceDetectorYN.create(
+            detector = cv2.FaceDetectorYN.create(
                 YUNET_MODEL_PATH,
                 "",
                 (input_w, input_h),
@@ -1089,35 +1300,40 @@ def _get_yunet_detector(input_w, input_h):
                 0.3,   # nms
                 5000,
             )
-            _yunet_input_size = (input_w, input_h)
-            print(f"[INFO] YuNet 人脸检测已加载: {YUNET_MODEL_PATH}")
+            _model_tls.yunet = detector
+            _model_tls.yunet_size = (input_w, input_h)
+            if not getattr(_get_yunet_detector, "_logged", False):
+                _get_yunet_detector._logged = True
+                print(f"[INFO] YuNet 人脸检测已加载: {YUNET_MODEL_PATH}")
         except Exception as exc:
             print(f"[WARN] YuNet 加载失败: {exc}")
-            _yunet_detector = None
             return None
-    elif _yunet_input_size != (input_w, input_h):
+    elif getattr(_model_tls, "yunet_size", None) != (input_w, input_h):
         try:
-            _yunet_detector.setInputSize((input_w, input_h))
-            _yunet_input_size = (input_w, input_h)
+            detector.setInputSize((input_w, input_h))
+            _model_tls.yunet_size = (input_w, input_h)
         except Exception as exc:
             print(f"[WARN] YuNet setInputSize 失败: {exc}")
-    return _yunet_detector
+    return detector
 
 
 def _get_sface_recognizer():
-    """OpenCV SFace 特征提取（比 dlib 编码快数倍）。"""
-    global _sface_recognizer
-    if _sface_recognizer is not None:
-        return _sface_recognizer
+    """OpenCV SFace 特征提取（比 dlib 编码快数倍）；线程局部实例。"""
+    recognizer = getattr(_model_tls, "sface", None)
+    if recognizer is not None:
+        return recognizer
     if not os.path.isfile(SFACE_MODEL_PATH):
         return None
     try:
-        _sface_recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL_PATH, "")
-        print(f"[INFO] SFace 人脸识别已加载: {SFACE_MODEL_PATH}")
+        recognizer = cv2.FaceRecognizerSF.create(SFACE_MODEL_PATH, "")
+        _model_tls.sface = recognizer
+        if not getattr(_get_sface_recognizer, "_logged", False):
+            _get_sface_recognizer._logged = True
+            print(f"[INFO] SFace 人脸识别已加载: {SFACE_MODEL_PATH}")
     except Exception as exc:
         print(f"[WARN] SFace 加载失败: {exc}")
-        _sface_recognizer = None
-    return _sface_recognizer
+        return None
+    return recognizer
 
 
 def _yunet_best_face_row(bgr_roi):
@@ -1246,20 +1462,15 @@ def _match_encoding(encoding, known_encodings, known_names):
       - 明确未授权
     """
     if FACE_ENGINE == "sface":
-        known = np.asarray(known_encodings, dtype=np.float64)
-        vec = np.asarray(encoding, dtype=np.float64).reshape(-1)
-        kn = np.linalg.norm(known, axis=1)
-        vn = float(np.linalg.norm(vec))
-        sims = (known @ vec) / np.maximum(kn * max(vn, 1e-8), 1e-8)
-        # 同人多模板（原图+翻转）取最大余弦相似度
-        best_by_name = {}
-        for i, name in enumerate(known_names):
-            sim = float(sims[i])
-            if name not in best_by_name or sim > best_by_name[name][0]:
-                best_by_name[name] = (sim, i)
-        best_name, (best_sim, best_idx) = max(
-            best_by_name.items(), key=lambda kv: kv[1][0]
-        )
+        # known 已在 set_face_bank 中 L2 归一化：一次矩阵乘即得全部余弦相似度
+        known = known_encodings
+        vec = np.asarray(encoding, dtype=np.float32).reshape(-1)
+        vec = vec / max(float(np.linalg.norm(vec)), 1e-8)
+        sims = known @ vec
+        # 全局最大值 = 同人多模板（原图+翻转）取最大后再跨人取最大
+        best_idx = int(np.argmax(sims))
+        best_sim = float(sims[best_idx])
+        best_name = known_names[best_idx]
         best_distance = 1.0 - best_sim
         if best_sim >= SFACE_COSINE_THRESHOLD:
             return {
@@ -1286,15 +1497,10 @@ def _match_encoding(encoding, known_encodings, known_names):
         }
 
     distances = face_distance_np(known_encodings, encoding)
-    # 同人多模板取最小距离
-    best_by_name = {}
-    for i, name in enumerate(known_names):
-        dist = float(distances[i])
-        if name not in best_by_name or dist < best_by_name[name][0]:
-            best_by_name[name] = (dist, i)
-    best_name, (best_distance, best_idx) = min(
-        best_by_name.items(), key=lambda kv: kv[1][0]
-    )
+    # 全局最小距离 = 同人多模板取最小后再跨人取最小
+    best_idx = int(np.argmin(distances))
+    best_distance = float(distances[best_idx])
+    best_name = known_names[best_idx]
     if best_distance < FACE_DISTANCE_THRESHOLD:
         return {
             "auth_status": AUTH_STATUS_AUTHORIZED,
@@ -1322,7 +1528,11 @@ def _match_encoding(encoding, known_encodings, known_names):
 
 def face_distance_np(known_encodings, encoding):
     """本地欧氏距离，避免每次 import face_recognition.face_distance。"""
-    return np.linalg.norm(np.asarray(known_encodings) - encoding, axis=1)
+    return np.linalg.norm(
+        np.asarray(known_encodings, dtype=np.float32)
+        - np.asarray(encoding, dtype=np.float32).reshape(1, -1),
+        axis=1,
+    )
 
 
 def _encode_face_crop(rgb_roi, location, face_recognition, max_side=150):
@@ -1405,7 +1615,8 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         "face_found": True,
     }
 
-    if not known_encodings:
+    # 白名单是 numpy 矩阵，不能用 `not arr` 判空
+    if known_encodings is None or len(known_encodings) == 0:
         return unauthorized
 
     roi = _crop_face_roi(frame_bgr, x1, y1, x2, y2)
@@ -1551,59 +1762,80 @@ def _apply_identity_to_det(det, identity):
 
 
 def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names,
-                  cx, cy, track_id=None):
-    """后台人脸比对；结果按 track_id 投票/锁定，质量拒绝不累加未授权。"""
+                  cx, cy, track_id=None, job_key=None):
+    """
+    后台人脸比对（线程池执行）。
+    - 单帧原始结果计入 streak：投票过程中返回的「识别中」不再打断累计，
+      陌生人确认所需样本数从「投票 3 帧 + 确认 3 帧」降为 3 帧。
+    - 展示 / 缓存使用 track 投票结果，授权身份可锁定。
+    """
+    t0 = time.perf_counter()
     try:
         result = recognize_face_in_roi(
             frame_bgr, x1, y1, x2, y2, known_encodings, known_names
         )
+        face_ms = (time.perf_counter() - t0) * 1000.0
+        with _telemetry_lock:
+            prev_ms = _telemetry.get("face_ms", 0.0)
+        update_telemetry(face_ms=round(_ema(prev_ms, face_ms), 1))
         if not result or not result.get("face_found"):
             return
         result = dict(result)
-        result["result_ts"] = time.time()
+        ts = time.time()
+        result["result_ts"] = ts
+        # 1) 原始单帧样本 → streak（质量拒绝帧会打断未授权累计）
+        _note_face_sample(cx, cy, result, track_id=track_id)
+
+        # 2) 投票结果 → 展示 / 缓存
+        shown = result
         if track_id is not None:
             voted = _track_apply_vote(track_id, result)
             if voted is not None:
-                result = dict(voted)
-                result["result_ts"] = time.time()
-        if result.get("quality_reject"):
-            # 侧脸/模糊：只刷新「识别中」，打断未授权 streak
+                shown = dict(voted)
+                shown["result_ts"] = ts
+        if shown.get("quality_reject"):
+            # 侧脸/模糊：只刷新「识别中」
             _update_raw_face_result(cx, cy, {
                 "face_found": True,
                 "auth_status": None,
                 "recognized_name": "",
-                "face_distance": result.get("face_distance"),
-                "face_similarity": result.get("face_similarity"),
+                "face_distance": shown.get("face_distance"),
+                "face_similarity": shown.get("face_similarity"),
                 "quality_reject": True,
-                "result_ts": result["result_ts"],
-            })
+                "result_ts": ts,
+            }, track_id=track_id, note=False)
             return
-        sim = result.get("face_similarity")
+        sim = shown.get("face_similarity")
         strong = (
-            result.get("auth_status") == AUTH_STATUS_AUTHORIZED
+            shown.get("auth_status") == AUTH_STATUS_AUTHORIZED
             and FACE_ENGINE == "sface"
             and isinstance(sim, (int, float))
             and float(sim) >= SFACE_STRONG_AUTH
         )
-        _update_raw_face_result(cx, cy, result)
-        if strong or result.get("from_track_lock"):
-            _update_face_cache(cx, cy, result)
+        _update_raw_face_result(cx, cy, shown, track_id=track_id, note=False)
+        if strong or shown.get("from_track_lock"):
+            _update_face_cache(cx, cy, shown)
         elif (
-            result.get("auth_status") == AUTH_STATUS_AUTHORIZED
+            shown.get("auth_status") == AUTH_STATUS_AUTHORIZED
             and track_id is not None
         ):
             locked = _track_locked_identity(track_id)
             if locked:
                 _update_face_cache(cx, cy, locked)
+    except Exception:
+        print("[WARN] 人脸识别任务异常（保持识别中）:")
+        traceback.print_exc()
     finally:
         with _face_job_lock:
-            _face_job["busy"] = False
+            _face_job["inflight"].discard(job_key)
 
 
 def schedule_face_recognition(frame_bgr, det, known_encodings, known_names):
     """
-    对接近度最高的目标异步做人脸识别。
-    优先使用 track_id 锁定身份；无缓存时保持识别中。
+    对 ROI 内的接近目标异步做人脸识别（线程池，最多 FACE_MAX_WORKERS 个并发）。
+    - 已锁定 / 已确认缓存：直接复用，不再提交
+    - 有原始结果：先用于展示，同时继续按间隔采样（旧实现会在 1.2s 内跳过采样，
+      导致确认一个陌生人要等好几秒）
     """
     cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
     now = time.time()
@@ -1614,40 +1846,50 @@ def schedule_face_recognition(frame_bgr, det, known_encodings, known_names):
         _apply_identity_to_det(det, locked)
         return
 
-    cached = _cache_hit(cx, cy, now)
+    cached = _cache_hit(cx, cy, now) if track_id is None else None
     if cached is not None:
         _apply_identity_to_det(det, {**cached, "from_confirmed_cache": True})
         return
-    raw = _raw_face_hit(cx, cy, now)
+
+    raw = _track_raw_hit(track_id, now) if track_id is not None else _raw_face_hit(cx, cy, now)
     if raw is not None:
         _apply_identity_to_det(det, raw)
-        return
+    else:
+        det["auth_status"] = None
+        det["recognized_name"] = ""
+        det["face_distance"] = None
+        det["face_similarity"] = None
+        det["from_confirmed_cache"] = False
+        det["quality_reject"] = False
 
-    det["auth_status"] = None
-    det["recognized_name"] = ""
-    det["face_distance"] = None
-    det["face_similarity"] = None
-    det["from_confirmed_cache"] = False
-    det["quality_reject"] = False
-
+    job_key = track_id if track_id is not None else "pos"
     with _face_job_lock:
-        busy = _face_job["busy"]
-        due = (now - _face_job["last_submit"]) >= FACE_CHECK_INTERVAL
-        if busy or not due:
+        inflight = _face_job["inflight"]
+        last = _face_job["last_submit"].get(job_key, 0.0)
+        if (
+            job_key in inflight
+            or len(inflight) >= FACE_MAX_WORKERS
+            or (now - last) < FACE_CHECK_INTERVAL
+        ):
             return
-        _face_job["busy"] = True
-        _face_job["last_submit"] = now
+        inflight.add(job_key)
+        _face_job["last_submit"][job_key] = now
+        # 清理过期轨迹的提交记录
+        if len(_face_job["last_submit"]) > 64:
+            for k in [k for k, t in _face_job["last_submit"].items() if now - t > 30.0]:
+                _face_job["last_submit"].pop(k, None)
 
-    frame_copy = frame_bgr.copy()
-    threading.Thread(
-        target=_run_face_job,
-        args=(
-            frame_copy,
+    # frame_bgr 由 YOLO 线程每轮新拷贝且之后只读，可直接共享，省去整帧 copy
+    try:
+        _face_executor.submit(
+            _run_face_job,
+            frame_bgr,
             det["x1"], det["y1"], det["x2"], det["y2"],
-            known_encodings, known_names, cx, cy, track_id,
-        ),
-        daemon=True,
-    ).start()
+            known_encodings, known_names, cx, cy, track_id, job_key,
+        )
+    except RuntimeError:
+        with _face_job_lock:
+            _face_job["inflight"].discard(job_key)
 
 
 def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_h, frame_w,
@@ -1701,6 +1943,10 @@ def build_person_detection(frame_bgr, x1, y1, x2, y2, confidence, frame_h, frame
         _apply_identity_to_det(det, locked)
     elif run_face:
         schedule_face_recognition(frame_bgr, det, known_encodings, known_names)
+    elif track_id is not None:
+        raw = _track_raw_hit(track_id, time.time())
+        if raw is not None:
+            _apply_identity_to_det(det, raw)
     else:
         cx, cy = _bbox_center(x1, y1, x2, y2)
         cached = _cache_hit(cx, cy, time.time())
@@ -1809,8 +2055,36 @@ def evaluate_scene_alerts(detections):
     return extras
 
 
-def _select_face_index(candidates):
-    """优先给未锁定身份的 ROI 目标做人脸；尾随开启时下一帧会轮到第二人。"""
+def _smooth_track_box(track_id, x1, y1, x2, y2):
+    """对同一 track_id 的行人检测框做指数移动平均（EMA），抑制框抖动与距离跳变。"""
+    if track_id is None or BOX_EMA_ALPHA <= 0.0 or BOX_EMA_ALPHA >= 1.0:
+        return int(x1), int(y1), int(x2), int(y2)
+    alpha = float(BOX_EMA_ALPHA)
+    with _track_lock:
+        meta = _track_meta.get(track_id)
+        if meta is None:
+            return int(x1), int(y1), int(x2), int(y2)
+        prev = meta.get("ema_box")
+        if prev is None:
+            smoothed = (float(x1), float(y1), float(x2), float(y2))
+        else:
+            px1, py1, px2, py2 = prev
+            smoothed = (
+                alpha * float(x1) + (1.0 - alpha) * px1,
+                alpha * float(y1) + (1.0 - alpha) * py1,
+                alpha * float(x2) + (1.0 - alpha) * px2,
+                alpha * float(y2) + (1.0 - alpha) * py2,
+            )
+        meta["ema_box"] = smoothed
+    return int(round(smoothed[0])), int(round(smoothed[1])), int(round(smoothed[2])), int(round(smoothed[3]))
+
+
+def _select_face_indices(candidates, max_count=None):
+    """
+    选取最多 max_count 个 ROI 内接近目标并发做人脸识别（优先未锁定身份且接近度高的目标）。
+    多人同框 / 尾随场景下可同时识别前 N 个目标，无需排队等待。
+    """
+    limit = FACE_MAX_WORKERS if max_count is None else max(1, int(max_count))
     ranked = []
     for i, item in enumerate(candidates):
         prox, in_roi = item[0], item[1]
@@ -1820,9 +2094,15 @@ def _select_face_index(candidates):
         locked = _track_locked_identity(tid) is not None
         ranked.append((0 if not locked else 1, -prox, i))
     if not ranked:
-        return -1
+        return set()
     ranked.sort()
-    return ranked[0][2]
+    return {idx for _lock_flag, _neg_prox, idx in ranked[:limit]}
+
+
+def _select_face_index(candidates):
+    """兼容单目标索引选取。"""
+    indices = _select_face_indices(candidates, max_count=1)
+    return next(iter(indices), -1)
 
 
 def resolve_heartbeat_url():
@@ -1896,7 +2176,12 @@ def start_mjpeg_server():
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path in ("/health", "/"):
-                body = b'{"ok":true,"stream":"/video"}'
+                with _telemetry_lock:
+                    telem = dict(_telemetry)
+                body = json.dumps(
+                    {"ok": True, "stream": "/video", "telemetry": telem},
+                    ensure_ascii=False,
+                ).encode("utf-8")
                 self.send_response(200)
                 self._cors()
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1955,7 +2240,7 @@ def start_mjpeg_server():
 def send_heartbeat():
     """向云端上报设备存活心跳，并应用下发的 edgeConfig（保留门锁指令字段）。"""
     try:
-        response = requests.post(BACKEND_HEARTBEAT_URL, timeout=1.5)
+        response = _http.post(BACKEND_HEARTBEAT_URL, timeout=1.5)
         if response.status_code == 200:
             try:
                 res_json = response.json()
@@ -1999,18 +2284,24 @@ def heartbeat_loop():
         time.sleep(HEARTBEAT_INTERVAL)
 
 
-def frame_to_jpeg_base64(frame, quality=75):
-    """将 BGR 帧编码为 JPEG Base64 字符串（不含 data: 前缀）。"""
+def frame_to_jpeg_bytes(frame, quality=75):
+    """将 BGR 帧单次编码为 JPEG bytes。"""
     ok, buf = cv2.imencode(
         ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
     )
     if not ok:
         raise RuntimeError("JPEG 编码失败")
-    return base64.b64encode(buf.tobytes()).decode("ascii")
+    return buf.tobytes()
+
+
+def frame_to_jpeg_base64(frame, quality=75):
+    """将 BGR 帧编码为 JPEG Base64 字符串（不含 data: 前缀）。"""
+    return base64.b64encode(frame_to_jpeg_bytes(frame, quality=quality)).decode("ascii")
 
 
 def build_alert_payload(frame, device_id, area_ratio, auth_status, recognized_name,
-                        danger_level, alert_type=ALERT_TYPE_INTRUSION):
+                        danger_level, alert_type=ALERT_TYPE_INTRUSION,
+                        image_bytes=None):
     """
     构造上报 JSON（规格字段）+ 后端兼容字段。
 
@@ -2019,7 +2310,9 @@ def build_alert_payload(frame, device_id, area_ratio, auth_status, recognized_na
     兼容字段（现有 Spring Boot multipart 接口）:
       deviceId / proximityRatio / dangerLevel / recognizedName
     """
-    snapshot_b64 = frame_to_jpeg_base64(frame)
+    if image_bytes is None:
+        image_bytes = frame_to_jpeg_bytes(frame)
+    snapshot_b64 = base64.b64encode(image_bytes).decode("ascii")
     return {
         # ---- 规格要求字段 ----
         "auth_status": auth_status,
@@ -2062,33 +2355,31 @@ def log_authorized_passage(frame_clean, det):
         auth_status=AUTH_STATUS_AUTHORIZED,
         recognized_name=det.get("recognized_name", ""),
     )
-    threading.Thread(
-        target=save_and_post_alert_async,
-        args=(
-            capture_frame,
-            DEVICE_ID,
-            prox,
-            0,
-            AUTH_STATUS_AUTHORIZED,
-            det.get("recognized_name", ""),
-            ALERT_TYPE_INTRUSION,
-        ),
-        daemon=True,
-    ).start()
+    _upload_executor.submit(
+        save_and_post_alert_async,
+        capture_frame,
+        DEVICE_ID,
+        prox,
+        0,
+        AUTH_STATUS_AUTHORIZED,
+        det.get("recognized_name", ""),
+        ALERT_TYPE_INTRUSION,
+    )
 
 
 def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
                               auth_status, recognized_name,
                               alert_type=ALERT_TYPE_INTRUSION):
     """
-    后台线程：内存 JPEG 编码 + HTTP 推送（无磁盘临时文件）。
+    后台线程池：单次内存 JPEG 编码 + Keep-Alive Session 推送（无磁盘临时文件）。
 
     主循环严禁阻塞 I/O；使用 cv2.imencode + BytesIO 直接 multipart 上传。
     """
     try:
+        image_bytes = frame_to_jpeg_bytes(frame, quality=75)
         payload = build_alert_payload(
             frame, device_id, area_ratio, auth_status, recognized_name,
-            danger_level, alert_type,
+            danger_level, alert_type, image_bytes=image_bytes,
         )
 
         preview = {
@@ -2100,12 +2391,6 @@ def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
             f"告警 JSON 就绪: {preview}"
         )
 
-        ok, buf = cv2.imencode(
-            ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-        )
-        if not ok:
-            raise RuntimeError("cv2.imencode('.jpg') failed")
-        image_bytes = buf.tobytes()
         bio = io.BytesIO(image_bytes)
 
         form_data = {
@@ -2119,12 +2404,11 @@ def save_and_post_alert_async(frame, device_id, area_ratio, danger_level,
             "area_ratio": str(payload["area_ratio"]),
             "alertType": payload.get("alertType") or ALERT_TYPE_INTRUSION,
             "alert_type": payload.get("alert_type") or ALERT_TYPE_INTRUSION,
-            "snapshot_base64": payload["snapshot_base64"],
         }
         files = {
             "file": ("capture.jpg", bio, "image/jpeg"),
         }
-        response = requests.post(
+        response = _http.post(
             BACKEND_UPLOAD_URL,
             data=form_data,
             files=files,
@@ -2234,7 +2518,7 @@ def flush_offline_cache(max_items=3):
                 with open(jpg, "rb") as handle:
                     image_bytes = handle.read()
                 bio = io.BytesIO(image_bytes)
-                response = requests.post(
+                response = _http.post(
                     BACKEND_UPLOAD_URL,
                     data=meta,
                     files={"file": ("capture.jpg", bio, "image/jpeg")},
@@ -2269,21 +2553,29 @@ def render_alert_capture(frame, x1, y1, x2, y2, confidence,
     """生成带告警框的上传用渲染图。授权绿框，未授权红框。"""
     annotated = frame.copy()
     is_auth = auth_status == AUTH_STATUS_AUTHORIZED
+    top_y = (y1 - 8) if y1 >= 38 else (y1 + 32)
 
     if is_auth:
-        color = (0, 200, 0)
+        color = (0, 210, 70)
         label = f"已授权：{recognized_name} ({confidence:.2f})"
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 4)
-        put_cn_text(annotated, label, (x1, max(30, y1 - 8)), color, font_size=24)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        put_cn_text(
+            annotated, label, (x1 + 4, top_y), (100, 255, 140),
+            font_size=22, bg_color=(16, 20, 26),
+        )
     else:
-        color = (0, 0, 255)
+        color = (0, 0, 245)
         label = f"未授权 ({confidence:.2f})"
         if recognized_name:
             label = f"{recognized_name} ({confidence:.2f})"
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 4)
-        put_cn_text(annotated, label, (x1, max(30, y1 - 8)), (0, 255, 0), font_size=24)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
         put_cn_text(
-            annotated, "警告：未授权人员！", (40, 60), (0, 0, 255), font_size=32,
+            annotated, label, (x1 + 4, top_y), (110, 110, 255),
+            font_size=22, bg_color=(16, 20, 26),
+        )
+        put_cn_text(
+            annotated, "警告：未授权人员！", (24, 52), (80, 80, 255),
+            font_size=28, bg_color=(16, 20, 26),
         )
     return annotated
 
@@ -2292,6 +2584,7 @@ def draw_roi_overlay(frame, alert=False):
     """半透明 ROI：常态绿色，告警红色。多边形存在时用 pointPolygon 同款顶点。"""
     h, w = frame.shape[:2]
     color = (0, 0, 220) if alert else (0, 180, 0)
+    text_color = (110, 110, 255) if alert else (110, 235, 130)
     overlay = frame.copy()
     if ALERT_ROI_POLYGON:
         poly = np.array(
@@ -2299,25 +2592,34 @@ def draw_roi_overlay(frame, alert=False):
             dtype=np.int32,
         )
         cv2.fillPoly(overlay, [poly], color)
-        cv2.addWeighted(overlay, 0.22, frame, 0.78, 0, frame)
+        cv2.addWeighted(overlay, 0.16, frame, 0.84, 0, frame)
         cv2.polylines(frame, [poly], True, color, 2)
-        label_x, label_y = int(poly[:, 0].min()) + 6, int(poly[:, 1].min()) + 16
+        label_x = int(poly[:, 0].max()) - 96
+        label_y = int(poly[:, 1].min()) + 24
     else:
         rx1, ry1, rx2, ry2 = ALERT_ROI_NORM
         p1 = (int(rx1 * w), int(ry1 * h))
         p2 = (int(rx2 * w), int(ry2 * h))
         cv2.rectangle(overlay, p1, p2, color, -1)
-        cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
+        cv2.addWeighted(overlay, 0.14, frame, 0.86, 0, frame)
         cv2.rectangle(frame, p1, p2, color, 2)
-        label_x, label_y = p1[0] + 6, p1[1] + 16
-    label_x = min(max(0, label_x), max(0, w - 80))
-    label_y = min(max(16, label_y), h - 4)
-    put_cn_text(frame, "ROI 警戒区", (label_x, label_y), color, font_size=14)
+        # 置于 ROI 右上角内侧，避免与左上角检测框标题重叠
+        label_x = p2[0] - 96
+        label_y = p1[1] + 24
+    label_x = min(max(8, label_x), max(8, w - 96))
+    label_y = min(max(24, label_y), h - 8)
+    put_cn_text(
+        frame, "ROI 警戒区", (label_x, label_y),
+        text_color, font_size=14, bg_color=(16, 20, 26), bg_alpha=0.65,
+    )
 
 
 def draw_status_hud(frame):
     if _low_light.get("active"):
-        put_cn_text(frame, "Low-Light Enhanced", (12, 28), (0, 220, 255), font_size=18)
+        put_cn_text(
+            frame, "暗光增强 (CLAHE)", (12, 28),
+            (0, 225, 255), font_size=16, bg_color=(16, 20, 26), bg_alpha=0.65,
+        )
 
 
 def draw_live_detection(frame, x1, y1, x2, y2, confidence, in_cooldown,
@@ -2325,53 +2627,68 @@ def draw_live_detection(frame, x1, y1, x2, y2, confidence, in_cooldown,
                         proximity_ratio=None, track_id=None, dwell_sec=0.0,
                         in_roi=True, d_est=None, distance_band_name=None, motion=None):
     """实时预览绘制：授权绿框，未授权红框，识别中黄框，远处/区外灰框。"""
+    h, _w = frame.shape[:2]
     prox = float(proximity_ratio if proximity_ratio is not None else area_ratio)
     tid_txt = f"#{track_id} " if track_id is not None else ""
     if auth_status == AUTH_STATUS_AUTHORIZED:
-        color = (0, 200, 0)
+        color = (0, 210, 70)
+        text_color = (90, 255, 130)
         label = f"{tid_txt}{recognized_name} ({confidence:.2f})"
     elif auth_status == AUTH_STATUS_UNAUTHORIZED:
-        color = (0, 0, 255)
+        color = (0, 0, 245)
+        text_color = (100, 100, 255)
         label = f"{tid_txt}陌生人 ({confidence:.2f})"
         if recognized_name:
             label = f"{tid_txt}{recognized_name} ({confidence:.2f})"
     elif prox >= PROXIMITY_ALERT_THRESHOLD and in_roi:
         color = (0, 200, 255)
+        text_color = (70, 225, 255)
         label = f"{tid_txt}识别中… P={prox:.2f}"
     else:
         color = (180, 180, 180)
+        text_color = (220, 220, 220)
         zone = "" if in_roi else "区外 "
         label = f"{tid_txt}{zone}行人 P={prox:.2f} ({confidence:.2f})"
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-    put_cn_text(frame, label, (x1, max(18, y1 - 6)), color, font_size=20)
-    extra_y = min(y2 + 18, frame.shape[0] - 8)
+
+    # 顶部主标签：若框顶空间充足则画在框外上方，否则画在框内左上角，绝不压框线
+    top_y = (y1 - 6) if y1 >= 34 else (y1 + 26)
+    top_x = (x1 + 2) if y1 >= 34 else (x1 + 6)
+    put_cn_text(
+        frame, label, (top_x, top_y),
+        text_color, font_size=18, bg_color=(16, 20, 26), bg_alpha=0.72,
+    )
+
+    # 底部辅助信息合并为单行标签，防止贴底时多行文字挤压在同一点造成重叠乱码
+    sub_parts = []
     if d_est is not None:
-        band = distance_band_name or distance_band(d_est)
-        put_cn_text(
-            frame, f"D={d_est:.1f}m {band}",
-            (x1, extra_y), color, font_size=15,
-        )
-        extra_y = min(extra_y + 18, frame.shape[0] - 8)
+        if auth_status == AUTH_STATUS_AUTHORIZED:
+            sub_parts.append(f"距离 {d_est:.1f}m")
+        else:
+            band = distance_band_name or distance_band(d_est)
+            band_cn = {"DANGER": "近距", "WARN": "接近", "SAFE": "安全"}.get(band, band)
+            sub_parts.append(f"距离 {d_est:.1f}m·{band_cn}")
     if motion and motion != "Unknown":
         motion_cn = {
             "Approaching": "靠近",
             "Leaving": "远离",
             "Passing": "路过",
         }.get(motion, motion)
-        put_cn_text(frame, motion_cn, (x1, extra_y), color, font_size=15)
-        extra_y = min(extra_y + 18, frame.shape[0] - 8)
+        sub_parts.append(motion_cn)
     if track_id is not None and dwell_sec > 0.5:
-        put_cn_text(
-            frame, f"滞留{dwell_sec:.1f}s",
-            (x1, extra_y),
-            color, font_size=16,
-        )
+        sub_parts.append(f"滞留 {dwell_sec:.1f}s")
     if in_cooldown and auth_status == AUTH_STATUS_UNAUTHORIZED:
+        sub_parts.append("冷却中")
+
+    if sub_parts:
+        sub_text = " | ".join(sub_parts)
+        # 若框底下方有足够余量则画在框外下方，否则画在框内左下角
+        bot_y = (y2 + 22) if (y2 + 28 <= h) else (y2 - 8)
+        bot_x = (x1 + 2) if (y2 + 28 <= h) else (x1 + 6)
         put_cn_text(
-            frame, "冷却中",
-            (x1, min(y2 + 56, frame.shape[0] - 8)),
-            color, font_size=18,
+            frame, sub_text, (bot_x, bot_y),
+            text_color, font_size=14, bg_color=(16, 20, 26), bg_alpha=0.72,
         )
 
 
@@ -2584,19 +2901,16 @@ def dispatch_detection_action(frame_clean, det, alert_type=ALERT_TYPE_INTRUSION)
         recognized_name=title_name,
     )
     danger = det.get("danger_level") or (3 if alert_type != ALERT_TYPE_INTRUSION else 2)
-    threading.Thread(
-        target=save_and_post_alert_async,
-        args=(
-            capture_frame,
-            DEVICE_ID,
-            prox,
-            danger,
-            auth_status or AUTH_STATUS_UNAUTHORIZED,
-            title_name,
-            alert_type,
-        ),
-        daemon=True,
-    ).start()
+    _upload_executor.submit(
+        save_and_post_alert_async,
+        capture_frame,
+        DEVICE_ID,
+        prox,
+        danger,
+        auth_status or AUTH_STATUS_UNAUTHORIZED,
+        title_name,
+        alert_type,
+    )
     _alert_cooldown[cool_key] = now
     if alert_type == ALERT_TYPE_INTRUSION:
         last_alert_time = now
@@ -2614,20 +2928,65 @@ def dispatch_detection_action(frame_clean, det, alert_type=ALERT_TYPE_INTRUSION)
 #  主流程
 # =====================================================================
 
+def _warmup_models(model, yolo_device, use_half=False):
+    """启动时预热一次 YOLO + YuNet/SFace，消除首个行人进入画面时的首帧卡顿。"""
+    if not MODEL_WARMUP:
+        return
+    t0 = time.perf_counter()
+    try:
+        dummy = np.zeros((YOLO_IMGSZ, YOLO_IMGSZ, 3), dtype=np.uint8)
+        model.predict(
+            dummy,
+            imgsz=YOLO_IMGSZ,
+            device=yolo_device,
+            half=use_half,
+            classes=[0],
+            verbose=False,
+        )
+    except Exception as exc:
+        print(f"[WARN] YOLO 预热跳过: {exc}")
+
+    def _warm_face_worker():
+        try:
+            patch = np.zeros((160, 160, 3), dtype=np.uint8)
+            _get_yunet_detector(160, 160)
+            _get_sface_recognizer()
+            _yunet_best_face_row(patch)
+        except Exception:
+            pass
+
+    try:
+        futs = [_face_executor.submit(_warm_face_worker) for _ in range(FACE_MAX_WORKERS)]
+        for f in futs:
+            f.result(timeout=3.0)
+    except Exception:
+        pass
+    ms = (time.perf_counter() - t0) * 1000.0
+    print(f"[INFO] 模型预热完成 ({ms:.0f}ms, half={use_half}, face_workers={FACE_MAX_WORKERS})")
+
+
 def main():
     global last_alert_time
 
     yolo_device = resolve_yolo_device()
-    print(f"[INFO] 正在加载 YOLO 模型: {YOLO_WEIGHTS} (device={yolo_device}) ...")
+    use_half = bool(YOLO_HALF and str(yolo_device).startswith("cuda"))
+    print(f"[INFO] 正在加载 YOLO 模型: {YOLO_WEIGHTS} (device={yolo_device}, half={use_half}) ...")
     model = YOLO(YOLO_WEIGHTS)
     try:
         model.to(yolo_device)
     except Exception as exc:
         print(f"[WARN] model.to({yolo_device}) 失败，将在推理时指定 device: {exc}")
 
-    # ===== 预加载授权人脸库（双模板 + 原子引用，支持 .reload 热更新） =====
+    # ===== 预加载授权人脸库（双模板 + 预归一化矩阵 + 原子引用，支持 .reload 热更新） =====
     enc0, names0 = load_authorized_faces()
     set_face_bank(enc0, names0)
+    update_telemetry(
+        device=str(yolo_device),
+        engine=str(FACE_ENGINE),
+        half=use_half,
+        face_bank=len(set(names0)),
+    )
+    _warmup_models(model, yolo_device, use_half=use_half)
     face_reload_state = {"last_reload_mtime": 0.0}
     reload_flag = os.path.join(AUTHORIZED_FACES_DIR, ".reload")
     if os.path.isfile(reload_flag):
@@ -2712,15 +3071,17 @@ def main():
                     )
 
                 # ByteTrack 跟踪 person；GPU/CPU 由 yolo_device 指定
-                update_low_light_state(frame_to_process)
+                t_yolo = time.perf_counter()
+                low_light_active = update_low_light_state(frame_to_process)
                 conf_now = CONF_THRESHOLD
-                if _low_light.get("active"):
+                if low_light_active:
                     conf_now = max(0.15, CONF_THRESHOLD * 0.85)
                 track_kwargs = dict(
                     conf=conf_now,
                     imgsz=YOLO_IMGSZ,
                     classes=[0],
                     device=yolo_device,
+                    half=use_half,
                     verbose=False,
                 )
                 if USE_BYTETRACK:
@@ -2729,6 +3090,7 @@ def main():
                     )
                 else:
                     results = model(infer_frame, **track_kwargs)
+                yolo_ms = (time.perf_counter() - t_yolo) * 1000.0
 
                 h, w = frame_to_process.shape[:2]
                 inv = (1.0 / scale) if scale > 0 else 1.0
@@ -2751,6 +3113,7 @@ def main():
                                 tid = int(box.id[0])
                             except Exception:
                                 tid = None
+                        x1, y1, x2, y2 = _smooth_track_box(tid, x1, y1, x2, y2)
                         prox, _, _, _, in_roi = compute_proximity(
                             x1, y1, x2, y2, h, w
                         )
@@ -2758,8 +3121,8 @@ def main():
                             (prox, in_roi, x1, y1, x2, y2, confidence, tid)
                         )
 
-                # 优先未锁定的 ROI 目标做人脸；尾随场景下锁定后下一帧轮到第二人
-                primary_idx = _select_face_index(candidates)
+                # 支持并发识别前 FACE_MAX_WORKERS 个未锁定 ROI 目标（多人同框 / 尾随更快响应）
+                face_indices = _select_face_indices(candidates, max_count=FACE_MAX_WORKERS)
 
                 new_detections = []
                 for i, (prox, in_roi, x1, y1, x2, y2, confidence, tid) in enumerate(
@@ -2772,10 +3135,18 @@ def main():
                         h, w,
                         known_encodings,
                         known_names,
-                        run_face=(i == primary_idx),
+                        run_face=(i in face_indices),
                         track_id=tid,
                     )
                     new_detections.append(det)
+
+                with _telemetry_lock:
+                    prev_yolo = _telemetry.get("yolo_ms", 0.0)
+                update_telemetry(
+                    yolo_ms=round(_ema(prev_yolo, yolo_ms), 1),
+                    persons=len(new_detections),
+                    low_light=bool(low_light_active),
+                )
 
                 with detections_lock:
                     active_detections = new_detections
@@ -2944,6 +3315,7 @@ def main():
 
     # -------------------- 摄像头 / 视频模式 --------------------
     threading.Thread(target=yolo_inference_thread, daemon=True).start()
+    fps_last_ts = time.perf_counter()
 
     while True:
         # 管理端新增授权人员后热加载人脸库（原子替换）
@@ -2953,6 +3325,13 @@ def main():
         if not ret:
             print("[ERROR] 无法读取视频帧！")
             break
+
+        now_perf = time.perf_counter()
+        dt = max(1e-4, now_perf - fps_last_ts)
+        fps_last_ts = now_perf
+        with _telemetry_lock:
+            prev_fps = _telemetry.get("fps", 0.0)
+        update_telemetry(fps=round(_ema(prev_fps, min(60.0, 1.0 / dt), alpha=0.15), 1))
 
         if is_fallback:
             put_cn_text(
@@ -2984,7 +3363,10 @@ def main():
         draw_roi_overlay(frame, alert=any(
             d.get("in_roi") and (
                 d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED
-                or d.get("distance_band") == "DANGER"
+                or (
+                    d.get("auth_status") != AUTH_STATUS_AUTHORIZED
+                    and d.get("distance_band") == "DANGER"
+                )
                 or d.get("alert_type") in (ALERT_TYPE_TAILGATING, ALERT_TYPE_LOITERING)
             )
             for d in current_detections
@@ -3016,7 +3398,8 @@ def main():
 
         if primary_det is not None and primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
             put_cn_text(
-                frame, "警告：未授权人员！", (50, 50), (0, 0, 255), font_size=34,
+                frame, "警告：未授权人员！", (16, 62), (90, 90, 255),
+                font_size=26, bg_color=(16, 20, 26), bg_alpha=0.75,
             )
 
         if primary_det is not None:
@@ -3028,9 +3411,15 @@ def main():
         for scene_det, scene_type in evaluate_scene_alerts(current_detections):
             dispatch_detection_action(frame_clean, scene_det, alert_type=scene_type)
             if scene_type == ALERT_TYPE_TAILGATING:
-                put_cn_text(frame, "警告：尾随闯入！", (50, 88), (0, 140, 255), font_size=30)
+                put_cn_text(
+                    frame, "警告：尾随闯入！", (16, 98), (0, 170, 255),
+                    font_size=24, bg_color=(16, 20, 26), bg_alpha=0.75,
+                )
             elif scene_type == ALERT_TYPE_LOITERING:
-                put_cn_text(frame, "警告：遮挡徘徊！", (50, 88), (180, 80, 255), font_size=30)
+                put_cn_text(
+                    frame, "警告：遮挡徘徊！", (16, 98), (200, 110, 255),
+                    font_size=24, bg_color=(16, 20, 26), bg_alpha=0.75,
+                )
 
         update_stream_frame(frame)
         if not HEADLESS:

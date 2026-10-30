@@ -55,6 +55,16 @@ export default function DashboardTab({
   const [inferenceData, setInferenceData] = useState<{ x: number; y1: number; y2: number }[]>([]);
   const [streamOnline, setStreamOnline] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
+  const [edgeTelemetry, setEdgeTelemetry] = useState<{
+    fps: number;
+    yolo_ms: number;
+    face_ms: number;
+    persons: number;
+    device: string;
+    engine: string;
+    half: boolean;
+    face_bank: number;
+  } | null>(null);
   const [compare, setCompare] = useState<{ passageCount: number; unauthorizedAlertCount: number; days: { date: string; passages: number; alerts: number }[] }>({
     passageCount: 0,
     unauthorizedAlertCount: 0,
@@ -66,20 +76,58 @@ export default function DashboardTab({
     [],
   );
 
-  // 探测边缘推流是否可用（不阻塞画面）
+  // 探测边缘推流是否可用并采集真实推理遥测（FPS / YOLO耗时 / SFace耗时）
   useEffect(() => {
     let cancelled = false;
     const check = () => {
       fetch(streamHealthUrl, { method: 'GET', cache: 'no-store' })
-        .then((r) => {
-          if (!cancelled) setStreamOnline(r.ok);
+        .then(async (r) => {
+          if (cancelled) return;
+          setStreamOnline(r.ok);
+          if (!r.ok) return;
+          try {
+            const data = await r.json();
+            if (data && data.telemetry && typeof data.telemetry === 'object') {
+              const t = data.telemetry;
+              const fps = Number(t.fps) || 0;
+              const yoloMs = Number(t.yolo_ms) || 0;
+              const faceMs = Number(t.face_ms) || 0;
+              setEdgeTelemetry({
+                fps,
+                yolo_ms: yoloMs,
+                face_ms: faceMs,
+                persons: Number(t.persons) || 0,
+                device: String(t.device || ''),
+                engine: String(t.engine || ''),
+                half: Boolean(t.half),
+                face_bank: Number(t.face_bank) || 0,
+              });
+              if (fps > 0 || yoloMs > 0) {
+                setInferenceData((prev) => {
+                  const base = prev.length === 40 ? prev.slice(1) : prev;
+                  // 将真实推理耗时与帧率映射到 SVG 坐标系 (40~190)
+                  const y1 = Math.max(35, Math.min(185, 180 - yoloMs * 1.4));
+                  const y2 = Math.max(45, Math.min(195, 190 - fps * 3.2));
+                  return [...base, { x: 0, y1, y2 }].map((pt, idx) => ({
+                    ...pt,
+                    x: idx * 20,
+                  }));
+                });
+              }
+            }
+          } catch {
+            // 忽略旧版非 JSON 响应
+          }
         })
         .catch(() => {
-          if (!cancelled) setStreamOnline(false);
+          if (!cancelled) {
+            setStreamOnline(false);
+            setEdgeTelemetry(null);
+          }
         });
     };
     check();
-    const timer = window.setInterval(check, 5000);
+    const timer = window.setInterval(check, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -122,11 +170,11 @@ export default function DashboardTab({
   };
 
   const handleDeleteDeviceClick = (id: string, name: string) => {
-    if (confirm(`Purge device nodes and decommission connection profile for ${name}?`)) {
+    if (confirm(`确认删除监控设备节点「${name}」并解除其连接配置吗？`)) {
       deleteDevice(id)
         .then(() => {
           setDevices(prev => prev.filter(d => d.id !== id));
-          alert(`Device ${name} deleted successfully.`);
+          alert(`设备「${name}」已成功删除。`);
         })
         .catch(err => console.error('Delete device failed', err));
     }
@@ -153,7 +201,7 @@ export default function DashboardTab({
             setDevices(mappedDevices);
           });
           setShowDeviceModal(false);
-          alert(`Device ${formDeviceName} registered successfully.`);
+          alert(`监控设备「${formDeviceName}」注册成功。`);
         })
         .catch(err => console.error('Add device failed', err));
     } else {
@@ -166,7 +214,7 @@ export default function DashboardTab({
             return d;
           }));
           setShowDeviceModal(false);
-          alert(`Device profile updated successfully.`);
+          alert('设备配置已成功更新。');
         })
         .catch(err => console.error('Update device failed', err));
     }
@@ -550,15 +598,30 @@ export default function DashboardTab({
             </div>
 
             {/* Legend indicators */}
-            <div className="flex gap-6 mt-4 pt-4 border-t border-outline-variant/10 font-sans text-[10px] text-on-surface-variant">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 bg-cyber-primary block" />
-                <span>YOLOv8m 推理神经网络负载</span>
+            <div className="flex flex-wrap items-center justify-between gap-4 mt-4 pt-4 border-t border-outline-variant/10 font-sans text-[10px] text-on-surface-variant">
+              <div className="flex gap-6">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 bg-cyber-primary block" />
+                  <span>YOLOv8 推理耗时与负载</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-0.5 border-t border-dashed border-cyber-secondary block" />
+                  <span>实时帧率与目标识别稳定度</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3 h-0.5 border-t border-dashed border-cyber-secondary block" />
-                <span>目标识别成功率 (置信度波动)</span>
-              </div>
+              {edgeTelemetry && streamOnline && (
+                <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] text-cyber-primary">
+                  <span>FPS: {edgeTelemetry.fps.toFixed(1)}</span>
+                  <span>YOLO: {edgeTelemetry.yolo_ms.toFixed(1)}ms</span>
+                  <span>SFace: {edgeTelemetry.face_ms.toFixed(1)}ms</span>
+                  <span>画面目标: {edgeTelemetry.persons}人</span>
+                  {edgeTelemetry.device && (
+                    <span className="text-on-surface-variant">
+                      [{edgeTelemetry.device.toUpperCase()}{edgeTelemetry.half ? '·FP16' : ''}]
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Shield, CheckCircle2, X, Camera, Percent } from 'lucide-react';
 import type { Alert } from '../types';
 
@@ -15,9 +15,14 @@ interface AlertPopupProps {
  * 未授权入侵强提醒（大屏中心红框）
  */
 export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: AlertPopupProps) {
+  const [imgError, setImgError] = useState(false);
   const name = alert?.recognizedName || '未授权人员/陌生人';
   const areaPct = Math.round(((alert?.areaRatio ?? alert?.confidence) || 0) * 1000) / 10;
   const imageSrc = alert?.imageSrc || '';
+
+  useEffect(() => {
+    setImgError(false);
+  }, [imageSrc, alert?.id]);
   const alertType = (alert?.alertType || 'INTRUSION').toUpperCase();
   const headline = alertType === 'TAILGATING'
     ? '警告：尾随闯入，授权人员身后有未授权目标！'
@@ -56,11 +61,12 @@ export default function AlertPopup({ alert, onClose, onDispatch, onIgnore }: Ale
         <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* 抓拍 */}
           <div className="relative h-52 md:h-full min-h-[200px] rounded-lg overflow-hidden border border-cyber-error/40 bg-cyber-surface-lowest">
-            {imageSrc ? (
+            {imageSrc && !imgError ? (
               <img
                 src={imageSrc}
                 alt="入侵抓拍"
                 className="w-full h-full object-cover"
+                onError={() => setImgError(true)}
               />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center text-on-surface-variant gap-2">

@@ -22,9 +22,10 @@ ON DUPLICATE KEY UPDATE
     `status` = VALUES(`status`);
 
 -- 确保管理员与安保账号存在，并统一角色枚举为 ADMIN / OPERATOR（密码: 123456）
+-- 哈希与 schema.sql 一致（BCrypt of 123456）；勿使用无效演示哈希，否则 Docker 二次种子会覆盖导致无法登录
 INSERT INTO `sys_user` (`username`, `password`, `nickname`, `role`) VALUES
-('admin',    '$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36PmSP2vnNP6pVBkBi9Ge1y', '系统管理员', 'ADMIN'),
-('security', '$2a$10$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36PmSP2vnNP6pVBkBi9Ge1y', '安保值班员', 'OPERATOR')
+('admin',    '$2b$12$DBBLgfeT0jFbnkJl1R4KIuWArHLMd77bM6tnBsgP0VdNjyicR65KK', '系统管理员', 'ADMIN'),
+('security', '$2b$12$DBBLgfeT0jFbnkJl1R4KIuWArHLMd77bM6tnBsgP0VdNjyicR65KK', '安保值班员', 'OPERATOR')
 ON DUPLICATE KEY UPDATE
     `password` = VALUES(`password`),
     `nickname` = VALUES(`nickname`),

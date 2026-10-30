@@ -333,7 +333,39 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
         wrapper.eq(AlertLog::getDeleted, 1);
+        List<AlertLog> toDelete = this.list(wrapper);
         this.remove(wrapper);
+        deleteSnapshotFiles(toDelete);
         return true;
+    }
+
+    /**
+     * 物理清理回收站时联动删除 uploads/ 下的抓拍图片文件，释放磁盘空间
+     */
+    private void deleteSnapshotFiles(List<AlertLog> alerts) {
+        if (alerts == null || alerts.isEmpty()) {
+            return;
+        }
+        java.io.File uploadDir = new java.io.File(System.getProperty("user.dir"), "uploads");
+        for (AlertLog alert : alerts) {
+            String url = alert.getImageUrl();
+            if (!StringUtils.hasText(url) || !url.startsWith("/uploads/")) {
+                continue;
+            }
+            String filename = url.substring("/uploads/".length());
+            if (filename.contains("..") || filename.contains("/") || filename.contains("\\")) {
+                continue;
+            }
+            java.io.File file = new java.io.File(uploadDir, filename);
+            if (file.isFile()) {
+                try {
+                    if (file.delete()) {
+                        log.info("已清理回收站告警关联抓拍文件: {}", file.getName());
+                    }
+                } catch (Exception e) {
+                    log.warn("清理抓拍文件失败: {}", file.getAbsolutePath(), e);
+                }
+            }
+        }
     }
 }

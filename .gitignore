@@ -54,6 +54,9 @@ _defense_extract/
 *.mp4
 *.avi
 !door-alert-frontend/public/favicon.svg
+# GitHub README 展示图（非隐私内容）
+!docs/screenshots/
+!docs/screenshots/**
 door-alert-ai/demo/*.jpg
 door-alert-ai/demo/*.jpeg
 door-alert-ai/demo/*.png
