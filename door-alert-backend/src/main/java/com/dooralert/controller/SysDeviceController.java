@@ -8,10 +8,12 @@ import com.dooralert.service.SysDeviceService;
 import com.dooralert.vo.DoorHeartbeatVO;
 import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -32,6 +34,9 @@ public class SysDeviceController {
 
     @Value("${device.heartbeat.timeout-seconds:30}")
     private long heartbeatTimeoutSeconds;
+
+    @Value("${edge.api-token:}")
+    private String edgeApiToken;
 
     /**
      * 记录设备心跳（供边缘端心跳接口与告警上报调用）
@@ -56,16 +61,23 @@ public class SysDeviceController {
 
     private void applyLiveStatus(SysDeviceVO vo) {
         if (vo != null) {
+            Long lastHeartbeat = deviceHeartbeatMap.get(vo.getId());
             vo.setStatus(resolveLiveStatus(vo.getId()));
+            if (lastHeartbeat != null) {
+                vo.setLastHeartbeatElapsedSec(Math.max(0L, (System.currentTimeMillis() - lastHeartbeat) / 1000L));
+            }
         }
     }
 
     /**
-     * 边缘端心跳上报（免登录，与告警 upload 同级）。
+     * 边缘端心跳上报（免登录，与告警 upload 同级；配置 edge.api-token 时校验 X-Edge-Token）。
      * 返回在线确认及边缘算法配置，供边缘端热更新。
      */
     @PostMapping("/{id}/heartbeat")
-    public Result<DoorHeartbeatVO> heartbeat(@PathVariable Long id) {
+    public Result<DoorHeartbeatVO> heartbeat(@PathVariable Long id, HttpServletRequest request) {
+        if (StringUtils.hasText(edgeApiToken) && !edgeApiToken.trim().equals(request.getHeader("X-Edge-Token"))) {
+            return Result.error(401, "边缘节点密钥校验失败");
+        }
         SysDeviceVO device = sysDeviceService.getDeviceById(id);
         if (device == null) {
             return Result.error("设备不存在");
@@ -98,9 +110,10 @@ public class SysDeviceController {
     }
 
     /**
-     * 保存边缘算法配置。边缘端下次心跳即可热更新。
+     * 保存边缘算法配置（仅 ADMIN 可修改）。边缘端下次心跳即可热更新。
      */
     @PutMapping("/{id}/edge-config")
+    @SaCheckRole("ADMIN")
     public Result<Boolean> updateEdgeConfig(@PathVariable Long id, @RequestBody EdgeConfigVO config) {
         return sysDeviceService.updateEdgeConfig(id, config)
                 ? Result.success(true)

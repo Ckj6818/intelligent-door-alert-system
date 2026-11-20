@@ -15,6 +15,7 @@ import com.dooralert.ws.AlertWebSocketServer;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
@@ -32,6 +33,9 @@ public class AlertLogController {
 
     @Autowired
     private PublicBaseUrlResolver publicBaseUrlResolver;
+
+    @Value("${edge.api-token:}")
+    private String edgeApiToken;
 
     /**
      * 分页查询告警列表
@@ -154,6 +158,7 @@ public class AlertLogController {
      */
     @PostMapping("/upload")
     public Result<AlertWsPayload> upload(
+            HttpServletRequest request,
             @RequestParam("deviceId") Long deviceId,
             @RequestParam(value = "proximityRatio", required = false) Double proximityRatio,
             @RequestParam(value = "area_ratio", required = false) Double areaRatio,
@@ -167,6 +172,9 @@ public class AlertLogController {
             @RequestParam(value = "snapshot_base64", required = false) String snapshotBase64,
             @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
         try {
+            if (StringUtils.hasText(edgeApiToken) && !edgeApiToken.trim().equals(request.getHeader("X-Edge-Token"))) {
+                return Result.error(401, "边缘节点密钥校验失败");
+            }
             AlertUploadDTO dto = new AlertUploadDTO();
             dto.setDeviceId(deviceId);
             dto.setProximityRatio(proximityRatio != null ? proximityRatio : areaRatio);

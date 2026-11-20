@@ -317,6 +317,9 @@ BANK_DETECT_MAX_SIDE = int(os.environ.get("BANK_DETECT_MAX_SIDE", "640"))
 _http = requests.Session()
 _http.mount("http://", HTTPAdapter(pool_connections=4, pool_maxsize=8))
 _http.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=8))
+EDGE_API_TOKEN = os.environ.get("EDGE_API_TOKEN", "").strip()
+if EDGE_API_TOKEN:
+    _http.headers.update({"X-Edge-Token": EDGE_API_TOKEN})
 
 # 实时遥测（/health 返回，供管理端绘制真实 FPS / 推理耗时）
 _telemetry_lock = threading.Lock()
@@ -1989,24 +1992,69 @@ def _enhance_face_roi(bgr):
     return cv2.cvtColor(cv2.merge((l2, a_ch, b_ch)), cv2.COLOR_LAB2BGR)
 
 
+_desired_video_source = os.environ.get("VIDEO_SOURCE", "").strip() or os.environ.get("CAMERA_INDEX", "0").strip() or "0"
+
+
 def apply_edge_config(cfg):
-    """心跳下发的算法阈值，写入内存后下一帧生效。"""
+    """心跳或 /apply-config 下发的算法/防区/视频源参数，写入内存后下一帧生效。"""
     global COOL_DOWN_INTERVAL, SFACE_COSINE_THRESHOLD, DIST_DANGER_M, TAILGATE_ENABLE
+    global CONF_THRESHOLD, LOITER_SECONDS, ALERT_ROI_POLYGON, _desired_video_source
     if not isinstance(cfg, dict):
         return
     changed = []
     if cfg.get("cooldownSec") is not None:
-        COOL_DOWN_INTERVAL = max(1.0, float(cfg["cooldownSec"]))
-        changed.append(f"cooldown={COOL_DOWN_INTERVAL:.0f}s")
+        val = max(1.0, float(cfg["cooldownSec"]))
+        if abs(val - COOL_DOWN_INTERVAL) > 1e-3:
+            COOL_DOWN_INTERVAL = val
+            changed.append(f"cooldown={COOL_DOWN_INTERVAL:.0f}s")
     if cfg.get("faceMatchThreshold") is not None:
-        SFACE_COSINE_THRESHOLD = float(cfg["faceMatchThreshold"])
-        changed.append(f"face={SFACE_COSINE_THRESHOLD:.3f}")
+        val = float(cfg["faceMatchThreshold"])
+        if abs(val - SFACE_COSINE_THRESHOLD) > 1e-4:
+            SFACE_COSINE_THRESHOLD = val
+            changed.append(f"face={SFACE_COSINE_THRESHOLD:.3f}")
     if cfg.get("dangerDistanceM") is not None:
-        DIST_DANGER_M = float(cfg["dangerDistanceM"])
-        changed.append(f"danger<={DIST_DANGER_M:.2f}m")
+        val = float(cfg["dangerDistanceM"])
+        if abs(val - DIST_DANGER_M) > 1e-3:
+            DIST_DANGER_M = val
+            changed.append(f"danger<={DIST_DANGER_M:.2f}m")
     if "tailgateEnabled" in cfg and cfg.get("tailgateEnabled") is not None:
-        TAILGATE_ENABLE = bool(cfg.get("tailgateEnabled"))
-        changed.append(f"tailgate={'on' if TAILGATE_ENABLE else 'off'}")
+        val = bool(cfg.get("tailgateEnabled"))
+        if val != TAILGATE_ENABLE:
+            TAILGATE_ENABLE = val
+            changed.append(f"tailgate={'on' if TAILGATE_ENABLE else 'off'}")
+    if cfg.get("yoloConfThreshold") is not None:
+        val = max(0.15, min(0.95, float(cfg["yoloConfThreshold"])))
+        if abs(val - CONF_THRESHOLD) > 1e-3:
+            CONF_THRESHOLD = val
+            changed.append(f"yolo_conf={CONF_THRESHOLD:.2f}")
+    if cfg.get("loiterSeconds") is not None:
+        val = max(2.0, float(cfg["loiterSeconds"]))
+        if abs(val - LOITER_SECONDS) > 1e-2:
+            LOITER_SECONDS = val
+            changed.append(f"loiter={LOITER_SECONDS:.1f}s")
+    if cfg.get("videoSource") is not None:
+        raw_src = str(cfg.get("videoSource") or "").strip()
+        if raw_src and raw_src != _desired_video_source:
+            _desired_video_source = raw_src
+            changed.append(f"videoSource={raw_src}")
+    if "roiPolygon" in cfg and cfg.get("roiPolygon") is not None:
+        raw_poly = cfg.get("roiPolygon")
+        new_poly = None
+        if isinstance(raw_poly, list) and len(raw_poly) >= 3:
+            pts = []
+            for pt in raw_poly:
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    try:
+                        px = max(0.0, min(1.0, round(float(pt[0]), 4)))
+                        py = max(0.0, min(1.0, round(float(pt[1]), 4)))
+                        pts.append((px, py))
+                    except (TypeError, ValueError):
+                        continue
+            if len(pts) >= 3:
+                new_poly = pts
+        if new_poly != ALERT_ROI_POLYGON:
+            ALERT_ROI_POLYGON = new_poly
+            changed.append(f"roi={'poly(' + str(len(new_poly)) + ')' if new_poly else 'default_rect'}")
     if changed:
         print(
             f"[{datetime.now().strftime('%H:%M:%S')}] "
@@ -2164,7 +2212,8 @@ def start_mjpeg_server():
 
         def _cors(self):
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
 
@@ -2173,11 +2222,47 @@ def start_mjpeg_server():
             self._cors()
             self.end_headers()
 
+        def do_POST(self):
+            path = self.path.split("?", 1)[0]
+            if path != "/apply-config":
+                self.send_response(404)
+                self._cors()
+                self.end_headers()
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                apply_edge_config(payload)
+                resp = json.dumps({"ok": True}, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self._cors()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            except Exception as exc:
+                resp = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8")
+                self.send_response(400)
+                self._cors()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
             if path in ("/health", "/"):
                 with _telemetry_lock:
                     telem = dict(_telemetry)
+                telem["roi_polygon"] = (
+                    [[float(p[0]), float(p[1])] for p in ALERT_ROI_POLYGON]
+                    if ALERT_ROI_POLYGON else []
+                )
+                telem["roi_norm"] = [float(x) for x in ALERT_ROI_NORM]
+                telem["video_source"] = str(_desired_video_source)
+                telem["yolo_conf"] = float(CONF_THRESHOLD)
+                telem["loiter_sec"] = float(LOITER_SECONDS)
                 body = json.dumps(
                     {"ok": True, "stream": "/video", "telemetry": telem},
                     ensure_ascii=False,
@@ -2688,18 +2773,25 @@ def draw_live_detection(frame, x1, y1, x2, y2, confidence, in_cooldown,
 #  视频源
 # =====================================================================
 
-def resolve_video_source():
+def resolve_video_source(override=None):
     """
     解析视频输入源：
-      - VIDEO_SOURCE=0 / 1           → 物理摄像头索引
-      - VIDEO_SOURCE=/app/demo/x.mp4 → 演示视频
-      - VIDEO_SOURCE=/app/demo/x.jpg → 静态图片
+      - VIDEO_SOURCE=0 / 1                → 物理摄像头索引
+      - VIDEO_SOURCE=rtsp://...           → RTSP / HTTP 网络摄像机流
+      - VIDEO_SOURCE=/app/demo/x.mp4      → 演示视频
+      - VIDEO_SOURCE=/app/demo/x.jpg      → 静态图片
     """
-    explicit = os.environ.get("VIDEO_SOURCE", "").strip()
+    explicit = (
+        str(override).strip()
+        if override is not None
+        else os.environ.get("VIDEO_SOURCE", "").strip()
+    )
     if explicit:
         if explicit.isdigit():
             return "camera", int(explicit)
         lower = explicit.lower()
+        if lower.startswith(("rtsp://", "rtsps://", "rtmp://", "http://", "https://")):
+            return "rtsp", explicit
         if lower.endswith((".jpg", ".jpeg", ".png", ".bmp", ".webp")):
             return "image", explicit
         return "file", explicit
@@ -2707,18 +2799,22 @@ def resolve_video_source():
 
 
 class FrameSource:
-    """统一封装摄像头 / 视频文件 / 静态图片三种输入。"""
+    """统一封装摄像头 / RTSP 网络流 / 视频文件 / 静态图片四种输入，支持热切换。"""
 
-    def __init__(self):
-        self.mode, self.source = resolve_video_source()
+    def __init__(self, spec=None):
+        self.raw_spec = str(spec if spec is not None else _desired_video_source).strip() or "0"
+        self.mode, self.source = resolve_video_source(self.raw_spec)
         self.cap = None
         self.static_frame = None
         self.api_preference = None
+        self._open_current(allow_demo_fallback=True)
 
+    def _open_current(self, allow_demo_fallback=True):
         if self.mode == "image":
-            self.static_frame = cv2.imread(self.source)
-            if self.static_frame is None:
+            img = _imread_bgr(self.source)
+            if img is None:
                 raise RuntimeError(f"无法读取演示图片: {self.source}")
+            self.static_frame = img
             print(f"[INFO] 图片演示模式: {self.source}")
             return
 
@@ -2749,20 +2845,35 @@ class FrameSource:
                 pass
 
             if not success:
-                if os.path.exists("demo/demo.jpg"):
+                if allow_demo_fallback and os.path.exists("demo/demo.jpg"):
                     print(
                         "[INFO] 未检测到可用摄像头或权限受限，"
                         "已自动切换至 demo/demo.jpg 演示模式运行"
                     )
                     self.mode = "image"
                     self.source = "demo/demo.jpg"
-                    self.static_frame = cv2.imread(self.source)
+                    self.static_frame = _imread_bgr(self.source)
                     return
                 hint = (
                     "Linux 容器请映射 devices: [/dev/video0:/dev/video0]；"
                     "Windows Docker 请改用 VIDEO_SOURCE=/app/demo/demo.mp4 或 .jpg"
                 )
                 raise RuntimeError(f"无法打开任何可用的摄像头视频源。{hint}")
+        elif self.mode == "rtsp":
+            print(f"[INFO] 正在连接 RTSP/网络视频流: {self.source}")
+            os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;3000000")
+            cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+            if cap.isOpened():
+                try:
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+                self.cap = cap
+                self.api_preference = "FFMPEG"
+                print(f"[INFO] RTSP/网络视频流连接成功: {self.source}")
+            else:
+                cap.release()
+                raise RuntimeError(f"无法连接 RTSP/网络流: {self.source}")
         else:
             print(f"[INFO] 打开视频源 ({self.mode}): {self.source}")
             self.cap = cv2.VideoCapture(self.source)
@@ -2773,6 +2884,49 @@ class FrameSource:
                     "Windows Docker 请改用 VIDEO_SOURCE=/app/demo/demo.mp4 或 .jpg"
                 )
                 raise RuntimeError(f"无法打开视频源: {self.source}。{hint}")
+
+    def maybe_switch(self, desired_spec):
+        """若管理端下发了新的视频源（摄像头索引 / RTSP 地址 / 演示图），热切换输入源。"""
+        global _desired_video_source
+        spec = str(desired_spec or "").strip()
+        if not spec or spec == self.raw_spec:
+            return False
+        new_mode, new_src = resolve_video_source(spec)
+        print(f"[INFO] 收到视频源热切换请求: {self.raw_spec} -> {spec} ({new_mode})")
+        old_cap = self.cap
+        old_mode, old_source, old_spec, old_static = (
+            self.mode, self.source, self.raw_spec, self.static_frame
+        )
+        try:
+            if old_cap is not None and new_mode == "camera" and old_mode == "camera" and new_src == old_source:
+                self.raw_spec = spec
+                return False
+            if old_cap is not None:
+                try:
+                    old_cap.release()
+                except Exception:
+                    pass
+            self.cap = None
+            self.static_frame = None
+            self.raw_spec = spec
+            self.mode = new_mode
+            self.source = new_src
+            self._open_current(allow_demo_fallback=False)
+            print(f"[INFO] 视频源热切换成功: {spec}")
+            return True
+        except Exception as exc:
+            print(f"[WARN] 视频源切换失败 ({spec}): {exc}，回退至原视频源 {old_spec}")
+            self.raw_spec = old_spec
+            _desired_video_source = old_spec
+            self.mode = old_mode
+            self.source = old_source
+            self.static_frame = old_static
+            if self.mode != "image":
+                try:
+                    self._open_current(allow_demo_fallback=True)
+                except Exception:
+                    pass
+            return False
 
     def read(self):
         """返回 (ret, frame, is_fallback)。is_fallback=True 表示降级帧，不应告警。"""
@@ -2807,6 +2961,29 @@ class FrameSource:
                 print("[WARN] 摄像头重连失败，临时展示演示图（不触发告警）。")
                 if os.path.exists("demo/demo.jpg"):
                     demo_img = cv2.imread("demo/demo.jpg")
+                    if demo_img is not None:
+                        return True, demo_img, True
+                return False, None, True
+
+            if self.mode == "rtsp":
+                print(f"[WARN] RTSP 流读取中断，正在尝试重新连接: {self.source}")
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                time.sleep(0.8)
+                self.cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+                if self.cap.isOpened():
+                    try:
+                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    except Exception:
+                        pass
+                    ret, frame = self.cap.read()
+                    if ret and frame is not None:
+                        print("[INFO] RTSP 流重新连接成功！")
+                        return True, frame, False
+                if os.path.exists("demo/demo.jpg"):
+                    demo_img = _imread_bgr("demo/demo.jpg")
                     if demo_img is not None:
                         return True, demo_img, True
                 return False, None, True
@@ -3314,6 +3491,8 @@ def main():
     while True:
         # 管理端新增授权人员后热加载人脸库（原子替换）
         maybe_hot_reload_faces(face_reload_state)
+        # 管理端切换摄像头/RTSP流后热切换输入源
+        frame_source.maybe_switch(_desired_video_source)
 
         ret, frame, is_fallback = frame_source.read()
         if not ret:

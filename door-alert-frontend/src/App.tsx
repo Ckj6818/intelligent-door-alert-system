@@ -45,14 +45,22 @@ export default function App() {
 
     getDeviceList({ current: 1, size: 50 }).then((res: any) => {
       const records = res.records || [];
-      const mappedDevices: DeviceStatus[] = records.map((d: any) => ({
-        id: String(d.id),
-        name: d.deviceName,
-        ip: d.ip || '192.168.1.' + (100 + d.id),
-        status: d.status === 1 ? 'online' : 'offline',
-        latency: d.status === 1 ? Math.floor(Math.random() * 15) + 5 : 0,
-        lastTimeout: d.status === 0 ? '04:22' : undefined,
-      }));
+      const mappedDevices: DeviceStatus[] = records.map((d: any) => {
+        const elapsed =
+          d.lastHeartbeatElapsedSec != null ? Number(d.lastHeartbeatElapsedSec) : null;
+        const formattedTimeout =
+          elapsed != null
+            ? `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
+            : '未连接';
+        return {
+          id: String(d.id),
+          name: d.deviceName,
+          ip: d.location || d.ip || '192.168.1.' + (100 + Number(d.id || 0)),
+          status: d.status === 1 ? 'online' : 'offline',
+          latency: d.status === 1 ? (elapsed != null ? Math.max(1, Math.min(30, elapsed)) : 1) : 0,
+          lastTimeout: d.status === 0 ? formattedTimeout : undefined,
+        };
+      });
       setDevices(mappedDevices);
     }).catch((err) => console.error('Failed to fetch devices', err));
 

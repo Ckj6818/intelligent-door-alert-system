@@ -30,9 +30,9 @@
 
 | 模块 | 核心职责 | 关键技术 |
 |:---|:---|:---|
-| **边缘 AI 节点** (`door-alert-ai`) | 视频流采集、暗光增强、行人检测与跟踪、透视距离与接近度门控、多目标并发人脸比对、离线缓存、MJPEG 实时流与 `/health` 遥测服务 | `YOLOv8` + `ByteTrack`、`YuNet` + `SFace`、`CLAHE`、`ThreadPool` |
-| **云端业务后端** (`door-alert-backend`) | 告警与授权通行落库、WebSocket 实时广播、心跳监测与边缘参数热下发、白名单同步、工单流转与 EasyExcel 报表导出 | `Spring Boot 3.2`、`MyBatis-Plus`、`Sa-Token`、`WebSocket`、`MySQL 8` |
-| **安防可视化大屏** (`door-alert-frontend`) | 同源嵌入 MJPEG 实时检测流、动态渲染 AI 推理遥测曲线（FPS / 延迟）、分级声光告警弹窗、告警工单闭环、授权人脸管理、回收站与审计中心 | `React 19`、`TypeScript`、`Vite 6`、`Tailwind CSS 4`、`Web Audio API` |
+| **边缘 AI 节点** (`door-alert-ai`) | 视频流/RTSP 热切换、暗光增强、行人检测与跟踪、多边形 ROI 防区与透视距离评估、并发人脸比对、离线缓存与 `/health` 遥测 | `YOLOv8` + `ByteTrack`、`YuNet` + `SFace`、`CLAHE`、`RTSP/FFmpeg` |
+| **云端业务后端** (`door-alert-backend`) | 告警与通行落库、WebSocket 广播、心跳监测与边缘配置热下发（阈值/防区/视频源）、回收站定时清理、白名单同步与报表导出 | `Spring Boot 3.2`、`MyBatis-Plus`、`Sa-Token`、`WebSocket`、`MySQL 8` |
+| **安防可视化大屏** (`door-alert-frontend`) | 同源 MJPEG 检测流、鼠标绘制多边形 ROI 防区、RTSP 热切换、AI 遥测曲线、分级声光弹窗、工单回收站与真数据报表 | `React 19`、`TypeScript`、`Vite 6`、`Tailwind CSS 4`、`Web Audio API` |
 
 ---
 
@@ -72,9 +72,9 @@
 <td width="50%" valign="top">
 
 ### 🖥️ 4. 实时遥测大屏与闭环工单管理
-- **零延迟 MJPEG 预览与真实遥测**：边缘端 `8090` 端口提供局部贴片渲染的高对比度中文 HUD 视频流，并通过 `/health` 暴露实时 `FPS`、`YOLO 耗时`、`SFace 耗时` 与目标人数，驱动前端动态曲线。
+- **零延迟 MJPEG 预览与可视化交互**：边缘端 `8090` 端口提供局部贴片渲染的高对比度中文 HUD 视频流与 `/health` 实时遥测；支持在网页实时画面上**直接用鼠标绘制多边形 ROI 防区**与**热切换 RTSP 网络流/摄像头**，毫秒级同步边缘节点生效。
 - **分级声光告警与通行分离**：授权通行仅记录通行日志与轻量提示；未授权/尾随/徘徊触发全屏红框强提醒与 Web Audio 分频告警音效。
-- **全生命周期数据治理**：支持告警派单、处置归档、逻辑回收站（永久清空时同步安全清理磁盘抓拍图片，防磁盘占满）及 Excel 审计报表导出。
+- **全生命周期数据治理**：支持告警派单、处置归档、逻辑回收站（定时自动清理与手动清空均同步安全删除磁盘抓拍图片）及真数据审计报表导出。
 
 </td>
 </tr>
@@ -97,12 +97,12 @@
 ```mermaid
 flowchart LR
   subgraph Edge ["边缘 AI 节点 (Python :8090)"]
-    Cam["USB 摄像头 / 视频源"] --> CLAHE["CLAHE 暗光增强"]
+    Cam["USB / RTSP 网络流热切换"] --> CLAHE["CLAHE 暗光增强"]
     CLAHE --> YOLO["YOLOv8 + ByteTrack"]
-    YOLO --> Prox["综合接近度 & 透视距离评估"]
+    YOLO --> Prox["多边形 ROI & 透视距离评估"]
     Prox --> Pool["YuNet + SFace 并发线程池"]
     Pool --> Judge["轨迹级滑动窗口投票 & 场景判定"]
-    Judge --> Stream["MJPEG 视频流 & /health 遥测"]
+    Judge --> Stream["MJPEG 视频流 & /health & /apply-config"]
     Judge --> Cache["离线 FIFO 缓存队列"]
   end
 
@@ -271,7 +271,8 @@ cd door-alert-ai && python -u doorAlert.py
 
 | 环境变量 | 默认值 | 说明 |
 |:---|:---|:---|
-| `VIDEO_SOURCE` | `0` | 视频输入源：摄像头索引（`0`/`1`）、视频路径（`.mp4`）或静态图片路径（`.jpg`） |
+| `VIDEO_SOURCE` | `0` | 视频输入源：摄像头索引（`0`/`1`）、RTSP 网络流（`rtsp://...`）、视频或静态图片，支持大屏热切换 |
+| `EDGE_API_TOKEN` | 空（开发免校验） | 可选边缘通信共享密钥；配置后后端将校验 `/upload` 与 `/heartbeat` 的 `X-Edge-Token` 请求头 |
 | `YOLO_WEIGHTS` | `yolov8n.pt` | YOLO 权重路径（若当前目录无 `yolov8n.pt` 则回退 `yolov8m.pt`） |
 | `YOLO_DEVICE` | `auto` | 推理设备：`auto`（自动检测 CUDA）、`cpu`、`cuda:0` |
 | `YOLO_HALF` | `0` | GPU 下是否开启 FP16 半精度推理（`1` 开启 / `0` 关闭） |
@@ -295,10 +296,11 @@ cd door-alert-ai && python -u doorAlert.py
 | `POST` | `/api/alerts/upload` | 边缘节点上报抓拍图与告警/通行元数据（支持 `INTRUSION` / `TAILGATING` / `LOITERING`） |
 | `GET` | `/api/alerts/page` | 分页查询告警工单列表（支持按状态、关键词过滤） |
 | `GET` | `/api/alerts/access-compare` | 授权通行与未授权入侵对比统计 |
-| `DELETE` | `/api/alerts/recycle/clear` | 永久清空告警回收站并同步删除磁盘抓拍图片 |
-| `GET` | `/api/alerts/export` | 导出告警记录 Excel 报表（`.xlsx`） |
-| `POST` | `/api/devices/{id}/heartbeat` | 边缘设备心跳上报，返回在线确认与最新 `edgeConfig` 算法参数 |
-| `GET/POST` | `/api/authorized-persons` | 授权人员白名单管理（新增/删除后自动写入 `.reload` 触发边缘端原子热重载） |
+| `DELETE` | `/api/alerts/recycle-bin/clear` | 永久清空告警回收站并同步删除磁盘抓拍图片（另配 `@Scheduled` 自动定时清理超期记录） |
+| `GET` | `/api/alerts/export` | 导出告警记录 JSON（前端生成 `.xlsx` 报表） |
+| `POST` | `/api/devices/{id}/heartbeat` | 边缘设备心跳上报，返回在线确认与最新 `edgeConfig`（含多边形 ROI / RTSP 视频源 / 阈值） |
+| `PUT` | `/api/devices/{id}/edge-config` | 保存边缘算法阈值、多边形 ROI 防区与视频源配置（仅 `ADMIN` 角色可操作） |
+| `GET/POST` | `/api/authorized-users` | 授权人员白名单管理（新增/启禁用/删除后写入 `.reload` 触发边缘端原子热重载） |
 | `WS` | `/ws/alerts` | WebSocket 实时推送告警与通行事件 |
 
 </details>

@@ -243,6 +243,10 @@ public class SysAuthorizedUserServiceImpl
     }
 
     private Path resolveAuthorizedFacesDir() {
+        String envDir = System.getenv("AUTHORIZED_FACES_DIR");
+        if (StringUtils.hasText(envDir)) {
+            return Paths.get(envDir.trim()).toAbsolutePath().normalize();
+        }
         Path cwd = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
         // 常见：从 door-alert-backend 启动
         Path sibling = cwd.resolveSibling("door-alert-ai").resolve("authorized_faces");

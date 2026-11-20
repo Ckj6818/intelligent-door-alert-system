@@ -37,11 +37,13 @@ services:
       SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/intelligent_door_alert?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_general_ci&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: "123456"
+      AUTHORIZED_FACES_DIR: /app/authorized_faces
       TZ: Asia/Shanghai
     ports:
       - "8081:8081"
     volumes:
       - backend_uploads:/app/uploads
+      - ./door-alert-ai/authorized_faces:/app/authorized_faces
 
   frontend:
     build: ./door-alert-frontend
@@ -66,11 +68,15 @@ services:
       HEARTBEAT_INTERVAL: "10"
       HEADLESS: "1"
       VIDEO_LOOP: "1"
+      AUTHORIZED_FACES_DIR: /app/authorized_faces
       # Windows Docker 无法直连 USB 摄像头：默认用挂载的 demo.jpg / demo.mp4 做答辩演示
       VIDEO_SOURCE: /app/demo/demo.jpg
       # Linux 物理摄像头模式见 docker-compose.camera.yml
+    ports:
+      - "8090:8090"
     volumes:
       - ./door-alert-ai/demo:/app/demo:ro
+      - ./door-alert-ai/authorized_faces:/app/authorized_faces
     # Linux 宿主机物理摄像头（Windows 请用上面的 demo 视频/图片）：
     # devices:
     #   - /dev/video0:/dev/video0

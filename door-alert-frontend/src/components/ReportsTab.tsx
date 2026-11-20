@@ -15,7 +15,7 @@ import {
   Settings2
 } from 'lucide-react';
 import { NodeReport, SystemUser } from '../types';
-import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts, getPassageTodayStats, getPassagePage } from '@/api/index';
+import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts, getPassageTodayStats, getPassagePage, getDeviceList, getAlertList } from '@/api/index';
 import * as XLSX from 'xlsx';
 
 interface ReportsTabProps {
@@ -23,12 +23,10 @@ interface ReportsTabProps {
 }
 
 export default function ReportsTab({ searchQuery }: ReportsTabProps) {
-  // Nodes telemetry state
-  const [nodes, setNodes] = useState<NodeReport[]>([
-    { nodeId: 'SEC-ALPHA-01', dataType: '门禁出入日志', totalEvents: 1248, criticality: 'LOW', avgResponse: '1.2秒', lastAggregation: '10分钟前' },
-    { nodeId: 'SEC-BETA-09', dataType: '生物特征识别波动', totalEvents: 42, criticality: 'HIGH', avgResponse: '0.4秒', lastAggregation: '2分钟前' },
-    { nodeId: 'CAM-GRID-04', dataType: '画面运动分析', totalEvents: 8931, criticality: 'MED', avgResponse: '0.8秒', lastAggregation: '35秒前' }
-  ]);
+  // 真实设备节点遥测与统计
+  const [nodes, setNodes] = useState<NodeReport[]>([]);
+  const [onlineSummary, setOnlineSummary] = useState({ online: 0, total: 0 });
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [passageStats, setPassageStats] = useState({ passageCount: 0, unauthorizedAlertCount: 0 });
   const [recentPassages, setRecentPassages] = useState<any[]>([]);
 
@@ -45,13 +43,79 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
     getPassagePage({ current: 1, size: 8 })
       .then((res: any) => setRecentPassages(res?.records || []))
       .catch(() => {});
+
+    const apiStart = performance.now();
+    Promise.allSettled([
+      getDeviceList({ current: 1, size: 50 }),
+      getAlertList({ current: 1, size: 100 }),
+      fetch('/video-stream/health', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]).then(([devRes, alertRes, healthRes]) => {
+      const apiLatency = Math.max(1, Math.round(performance.now() - apiStart));
+      const deviceRecords: any[] =
+        devRes.status === 'fulfilled' ? (devRes.value?.records || []) : [];
+      const alertRecords: any[] =
+        alertRes.status === 'fulfilled' ? (alertRes.value?.records || []) : [];
+      const telemetry: any =
+        healthRes.status === 'fulfilled' ? healthRes.value?.telemetry : null;
+
+      const yoloMs = Number(telemetry?.yolo_ms) || 0;
+      setLatencyMs(yoloMs > 0 ? Math.round(yoloMs) : apiLatency);
+
+      const onlineCount = deviceRecords.filter((d) => Number(d.status) === 1).length;
+      setOnlineSummary({ online: onlineCount, total: deviceRecords.length });
+
+      // 按 deviceId 聚合真实告警统计
+      const alertStats = new Map<
+        number,
+        { count: number; maxDanger: number; latestTime: string | null }
+      >();
+      for (const a of alertRecords) {
+        const did = Number(a.deviceId);
+        if (!did) continue;
+        const prev = alertStats.get(did) || { count: 0, maxDanger: 1, latestTime: null };
+        prev.count += 1;
+        prev.maxDanger = Math.max(prev.maxDanger, Number(a.dangerLevel) || 1);
+        if (a.createTime && (!prev.latestTime || a.createTime > prev.latestTime)) {
+          prev.latestTime = a.createTime;
+        }
+        alertStats.set(did, prev);
+      }
+
+      const mappedNodes: NodeReport[] = deviceRecords.map((d) => {
+        const did = Number(d.id);
+        const stat = alertStats.get(did);
+        const maxDanger = stat?.maxDanger ?? 1;
+        const criticality: NodeReport['criticality'] =
+          maxDanger >= 3 ? 'HIGH' : maxDanger === 2 ? 'MED' : 'LOW';
+        const isOnline = Number(d.status) === 1;
+        const elapsed = d.lastHeartbeatElapsedSec != null ? Number(d.lastHeartbeatElapsedSec) : null;
+        return {
+          nodeId: `DEV-${String(did).padStart(2, '0')} · ${d.deviceName || '门禁节点'}`,
+          dataType: d.location ? `${d.location}（门禁视觉流）` : '门禁视觉检测流',
+          totalEvents: stat?.count ?? 0,
+          criticality,
+          avgResponse: isOnline
+            ? (yoloMs > 0 && did === 1 ? `${yoloMs.toFixed(1)}ms (YOLO)` : `${apiLatency}ms (API)`)
+            : '离线',
+          lastAggregation:
+            elapsed != null
+              ? `${elapsed}秒前心跳`
+              : stat?.latestTime
+                ? new Date(stat.latestTime).toLocaleString()
+                : '暂无心跳',
+        };
+      });
+      setNodes(mappedNodes);
+    });
   }, []);
 
   const handleExportSpreadsheet = async () => {
     try {
       const records = await exportAlerts();
       if (!records || records.length === 0) {
-        alert('No alert logs available for export.');
+        alert('当前暂无可导出的告警记录。');
         return;
       }
       const rows = records.map((item: any) => {
@@ -189,26 +253,26 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           </div>
         </div>
         <div className="glass-panel p-6 rounded-lg">
-          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">当前活动会话</p>
+          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">在线边缘设备</p>
           <div className="flex items-end justify-between">
-            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">12</h3>
-            <span className="text-on-surface-variant font-sans text-xs">在线中</span>
+            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">
+              {onlineSummary.online} / {onlineSummary.total}
+            </h3>
+            <span className="text-on-surface-variant font-sans text-xs">
+              {onlineSummary.online > 0 ? '心跳在线' : '待接入'}
+            </span>
           </div>
         </div>
 
         <div className="glass-panel p-6 rounded-lg">
-          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">网络通信延迟</p>
+          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">通信与推理延迟</p>
           <div className="flex items-end justify-between">
-            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">24ms</h3>
-            <span className="text-cyber-secondary font-sans text-xs font-bold">优良</span>
-          </div>
-        </div>
-
-        <div className="glass-panel p-6 rounded-lg">
-          <p className="text-label-caps text-on-surface-variant mb-2 text-[10px] font-sans">数据库在线时长</p>
-          <div className="flex items-end justify-between">
-            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">99.9%</h3>
-            <ShieldCheck className="text-cyber-secondary w-7 h-7" />
+            <h3 className="text-display-lg text-cyber-primary font-bold tabular-nums">
+              {latencyMs !== null ? `${latencyMs}ms` : '--'}
+            </h3>
+            <span className="text-cyber-secondary font-sans text-xs font-bold">
+              {latencyMs !== null && latencyMs <= 60 ? '优良' : latencyMs !== null ? '正常' : '检测中'}
+            </span>
           </div>
         </div>
       </div>
@@ -290,26 +354,34 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-outline-variant/10">
-                {filteredNodes.map((nd) => (
-                  <tr key={nd.nodeId} className="hover:bg-cyber-primary/5 transition-colors cursor-pointer">
-                    <td className="px-6 py-4 font-mono text-xs font-bold text-cyber-primary">{nd.nodeId}</td>
-                    <td className="px-6 py-4 font-sans text-xs text-on-surface">{nd.dataType}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-on-surface">{nd.totalEvents.toLocaleString()}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-widest font-bold border ${
-                        nd.criticality === 'HIGH'
-                          ? 'bg-cyber-error-dim/10 border-cyber-error/30 text-cyber-error'
-                          : nd.criticality === 'MED'
-                          ? 'bg-cyber-warning-dim/10 border-cyber-warning/30 text-cyber-warning'
-                          : 'bg-cyber-secondary-dim/10 border-cyber-secondary/30 text-cyber-secondary'
-                      }`}>
-                        {nd.criticality === 'HIGH' ? '高' : nd.criticality === 'MED' ? '中' : '低'}
-                      </span>
+                {filteredNodes.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-6 text-center text-xs text-on-surface-variant font-sans">
+                      暂无匹配的设备节点统计数据
                     </td>
-                    <td className="px-6 py-4 font-mono text-xs text-on-surface-variant">{nd.avgResponse}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-on-surface-variant/80">{nd.lastAggregation}</td>
                   </tr>
-                ))}
+                ) : (
+                  filteredNodes.map((nd) => (
+                    <tr key={nd.nodeId} className="hover:bg-cyber-primary/5 transition-colors cursor-pointer">
+                      <td className="px-6 py-4 font-mono text-xs font-bold text-cyber-primary">{nd.nodeId}</td>
+                      <td className="px-6 py-4 font-sans text-xs text-on-surface">{nd.dataType}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-on-surface">{nd.totalEvents.toLocaleString()}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-widest font-bold border ${
+                          nd.criticality === 'HIGH'
+                            ? 'bg-cyber-error-dim/10 border-cyber-error/30 text-cyber-error'
+                            : nd.criticality === 'MED'
+                            ? 'bg-cyber-warning-dim/10 border-cyber-warning/30 text-cyber-warning'
+                            : 'bg-cyber-secondary-dim/10 border-cyber-secondary/30 text-cyber-secondary'
+                        }`}>
+                          {nd.criticality === 'HIGH' ? '高' : nd.criticality === 'MED' ? '中' : '低'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 font-mono text-xs text-on-surface-variant">{nd.avgResponse}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-on-surface-variant/80">{nd.lastAggregation}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

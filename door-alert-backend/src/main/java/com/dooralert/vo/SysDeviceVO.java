@@ -19,5 +19,8 @@ public class SysDeviceVO {
     /** 0-离线, 1-在线（查询时由心跳池实时计算，非库内静态值） */
     private Integer status;
 
+    /** 距上次心跳经过秒数（无心跳记录时为 null） */
+    private Long lastHeartbeatElapsedSec;
+
     private LocalDateTime createTime;
 }

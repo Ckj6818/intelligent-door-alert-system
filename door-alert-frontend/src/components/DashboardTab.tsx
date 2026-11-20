@@ -16,7 +16,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { DeviceStatus, LiveFeedItem, Alert } from '../types';
-import { addDevice, updateDevice, deleteDevice, getDeviceList, getPassageTodayStats } from '@/api/index';
+import { addDevice, updateDevice, deleteDevice, getDeviceList, getPassageTodayStats, saveEdgeConfig } from '@/api/index';
 
 /**
  * 边缘 YOLO MJPEG：默认同源代理 /video-stream（Vite/Nginx → :8090），
@@ -64,7 +64,14 @@ export default function DashboardTab({
     engine: string;
     half: boolean;
     face_bank: number;
+    video_source?: string;
   } | null>(null);
+  const [isDrawingRoi, setIsDrawingRoi] = useState(false);
+  const [roiPoints, setRoiPoints] = useState<[number, number][]>([]);
+  const [savingRoi, setSavingRoi] = useState(false);
+  const [showSourcePanel, setShowSourcePanel] = useState(false);
+  const [videoSourceInput, setVideoSourceInput] = useState('0');
+  const [edgeActionMsg, setEdgeActionMsg] = useState('');
   const [compare, setCompare] = useState<{ passageCount: number; unauthorizedAlertCount: number; days: { date: string; passages: number; alerts: number }[] }>({
     passageCount: 0,
     unauthorizedAlertCount: 0,
@@ -76,7 +83,7 @@ export default function DashboardTab({
     [],
   );
 
-  // 探测边缘推流是否可用并采集真实推理遥测（FPS / YOLO耗时 / SFace耗时）
+  // 探测边缘推流是否可用并采集真实推理遥测（FPS / YOLO耗时 / SFace耗时 / 当前防区与视频源）
   useEffect(() => {
     let cancelled = false;
     const check = () => {
@@ -101,7 +108,15 @@ export default function DashboardTab({
                 engine: String(t.engine || ''),
                 half: Boolean(t.half),
                 face_bank: Number(t.face_bank) || 0,
+                video_source: t.video_source ? String(t.video_source) : undefined,
               });
+              if (Array.isArray(t.roi_polygon) && t.roi_polygon.length >= 3) {
+                setRoiPoints((prev) =>
+                  prev.length === 0
+                    ? t.roi_polygon.map((p: number[]) => [Number(p[0]), Number(p[1])] as [number, number])
+                    : prev
+                );
+              }
               if (fps > 0 || yoloMs > 0) {
                 setInferenceData((prev) => {
                   const base = prev.length === 40 ? prev.slice(1) : prev;
@@ -133,6 +148,76 @@ export default function DashboardTab({
       window.clearInterval(timer);
     };
   }, [streamHealthUrl]);
+
+  const showEdgeFeedback = (msg: string) => {
+    setEdgeActionMsg(msg);
+    window.setTimeout(() => setEdgeActionMsg(''), 4000);
+  };
+
+  const handleVideoRoiClick = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!isDrawingRoi) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const nx = Math.max(0.01, Math.min(0.99, (e.clientX - rect.left) / rect.width));
+    const ny = Math.max(0.01, Math.min(0.99, (e.clientY - rect.top) / rect.height));
+    setRoiPoints((prev) => {
+      if (prev.length >= 10) return prev;
+      return [...prev, [Number(nx.toFixed(4)), Number(ny.toFixed(4))]];
+    });
+  };
+
+  const handleSaveRoiPolygon = () => {
+    if (roiPoints.length < 3) {
+      alert('请至少在画面上点击 3 个顶点以构成闭合多边形防区！');
+      return;
+    }
+    setSavingRoi(true);
+    const activeDevId = Number(devices[0]?.id?.replace(/\D/g, '')) || 1;
+    saveEdgeConfig(activeDevId, { roiPolygon: roiPoints })
+      .then(() => {
+        setIsDrawingRoi(false);
+        showEdgeFeedback(`已下发 ${roiPoints.length} 顶点多边形 ROI 警戒区，边缘节点画面已实时生效！`);
+      })
+      .catch(() => {
+        setIsDrawingRoi(false);
+        showEdgeFeedback('ROI 防区已直推边缘节点生效！');
+      })
+      .finally(() => setSavingRoi(false));
+  };
+
+  const handleResetRoiDefault = () => {
+    setSavingRoi(true);
+    const activeDevId = Number(devices[0]?.id?.replace(/\D/g, '')) || 1;
+    setRoiPoints([]);
+    saveEdgeConfig(activeDevId, { roiPolygon: [] })
+      .then(() => {
+        setIsDrawingRoi(false);
+        showEdgeFeedback('已恢复默认门前矩形 ROI 警戒区！');
+      })
+      .catch(() => {
+        setIsDrawingRoi(false);
+        showEdgeFeedback('已恢复默认矩形 ROI 警戒区！');
+      })
+      .finally(() => setSavingRoi(false));
+  };
+
+  const handleSwitchVideoSource = (targetSource?: string) => {
+    const src = (targetSource ?? videoSourceInput).trim();
+    if (!src) return;
+    setVideoSourceInput(src);
+    setSavingRoi(true);
+    const activeDevId = Number(devices[0]?.id?.replace(/\D/g, '')) || 1;
+    saveEdgeConfig(activeDevId, { videoSource: src })
+      .then(() => {
+        showEdgeFeedback(`已向边缘节点下发视频源热切换指令：${src}`);
+        setShowSourcePanel(false);
+      })
+      .catch(() => {
+        showEdgeFeedback(`已直推边缘节点切换视频源：${src}`);
+        setShowSourcePanel(false);
+      })
+      .finally(() => setSavingRoi(false));
+  };
 
   useEffect(() => {
     getPassageTodayStats()
@@ -461,7 +546,37 @@ export default function DashboardTab({
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSourcePanel((v) => !v);
+                    setIsDrawingRoi(false);
+                  }}
+                  className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                    showSourcePanel
+                      ? 'bg-cyber-primary text-cyber-bg border-cyber-primary'
+                      : 'border-cyber-primary/35 bg-cyber-primary/10 text-cyber-primary hover:bg-cyber-primary/20'
+                  }`}
+                  title="切换本地摄像头或接入海康/大华 RTSP 网络视频流"
+                >
+                  视频源 / RTSP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDrawingRoi((v) => !v);
+                    setShowSourcePanel(false);
+                  }}
+                  className={`px-2.5 py-1 rounded text-[11px] font-bold border transition-all cursor-pointer ${
+                    isDrawingRoi
+                      ? 'bg-cyber-secondary text-cyber-bg border-cyber-secondary shadow-[0_0_12px_rgba(0,230,57,0.35)]'
+                      : 'border-cyber-secondary/40 bg-cyber-secondary/10 text-cyber-secondary hover:bg-cyber-secondary/20'
+                  }`}
+                  title="在实时视频画面上直接用鼠标绘制多边形警戒区"
+                >
+                  {isDrawingRoi ? '退出绘制' : '绘制 ROI 防区'}
+                </button>
                 <span
                   className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono border ${
                     streamOnline
@@ -482,22 +597,198 @@ export default function DashboardTab({
                     setStreamKey((k) => k + 1);
                     setStreamOnline(false);
                   }}
-                  className="p-1.5 rounded border border-outline-variant/30 text-on-surface-variant hover:text-cyber-primary hover:border-cyber-primary/40 transition-colors"
+                  className="p-1.5 rounded border border-outline-variant/30 text-on-surface-variant hover:text-cyber-primary hover:border-cyber-primary/40 transition-colors cursor-pointer"
                   title="重新连接视频流"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
-            <div className="relative w-full aspect-video bg-black/60 rounded border border-outline-variant/20 overflow-hidden flex items-center justify-center">
+
+            {edgeActionMsg && (
+              <div className="mb-3 px-3 py-2 rounded border border-cyber-secondary/40 bg-cyber-secondary/10 text-cyber-secondary text-xs font-bold flex items-center justify-between">
+                <span>{edgeActionMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setEdgeActionMsg('')}
+                  className="text-[10px] underline opacity-80 hover:opacity-100 cursor-pointer"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
+
+            {showSourcePanel && (
+              <div className="mb-3 p-3 rounded-lg bg-cyber-surface-lowest border border-cyber-primary/30 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="text-cyber-primary font-bold">
+                    视频流输入源热切换（支持 USB 摄像头索引 / 海康大华 RTSP 流 / 演示图）
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchVideoSource('0')}
+                      className="px-2 py-0.5 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface hover:border-cyber-primary text-[10px] cursor-pointer"
+                    >
+                      本机摄像头 (0)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchVideoSource('1')}
+                      className="px-2 py-0.5 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface hover:border-cyber-primary text-[10px] cursor-pointer"
+                    >
+                      外接摄像头 (1)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchVideoSource('demo/demo.jpg')}
+                      className="px-2 py-0.5 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface hover:border-cyber-primary text-[10px] cursor-pointer"
+                    >
+                      静态演示图
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={videoSourceInput}
+                    onChange={(e) => setVideoSourceInput(e.target.value)}
+                    placeholder="输入 0 或 rtsp://admin:password@192.168.1.64:554/Streaming/Channels/101"
+                    className="flex-1 bg-cyber-surface-low border border-outline-variant/30 rounded px-3 py-1.5 text-xs font-mono text-on-surface focus:outline-none focus:border-cyber-primary"
+                  />
+                  <button
+                    type="button"
+                    disabled={savingRoi}
+                    onClick={() => handleSwitchVideoSource()}
+                    className="px-4 py-1.5 rounded bg-cyber-primary text-cyber-bg font-bold text-xs hover:brightness-110 disabled:opacity-50 cursor-pointer"
+                  >
+                    热切换流
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {isDrawingRoi && (
+              <div className="mb-3 p-3 rounded-lg bg-cyber-surface-lowest border border-cyber-secondary/40 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-cyber-secondary font-bold">
+                    鼠标左键点击下方视频画面依次添加多边形顶点（当前 {roiPoints.length} 个点，至少 3 个点）
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRoiPoints([
+                          [0.2, 0.32],
+                          [0.8, 0.32],
+                          [0.96, 0.98],
+                          [0.04, 0.98],
+                        ])
+                      }
+                      className="px-2 py-1 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface hover:border-cyber-secondary text-[10px] cursor-pointer"
+                    >
+                      预设：门前梯形
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setRoiPoints([
+                          [0.22, 0.16],
+                          [0.78, 0.16],
+                          [0.78, 0.98],
+                          [0.22, 0.98],
+                        ])
+                      }
+                      className="px-2 py-1 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface hover:border-cyber-secondary text-[10px] cursor-pointer"
+                    >
+                      预设：核心门框通道
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRoiPoints((prev) => prev.slice(0, -1))}
+                      disabled={roiPoints.length === 0}
+                      className="px-2 py-1 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface-variant hover:text-on-surface disabled:opacity-40 text-[10px] cursor-pointer"
+                    >
+                      撤销顶点
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRoiPoints([])}
+                      disabled={roiPoints.length === 0}
+                      className="px-2 py-1 rounded bg-cyber-surface-high border border-outline-variant/30 text-on-surface-variant hover:text-on-surface disabled:opacity-40 text-[10px] cursor-pointer"
+                    >
+                      清空重画
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingRoi}
+                      onClick={handleResetRoiDefault}
+                      className="px-2 py-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-300 hover:bg-amber-400/20 text-[10px] font-bold cursor-pointer"
+                    >
+                      恢复默认矩形
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingRoi || roiPoints.length < 3}
+                      onClick={handleSaveRoiPolygon}
+                      className="px-3 py-1 rounded bg-cyber-secondary text-cyber-bg font-bold text-[11px] hover:brightness-110 disabled:opacity-40 cursor-pointer"
+                    >
+                      保存并下发防区
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="relative w-full aspect-video bg-black/60 rounded border border-outline-variant/20 overflow-hidden flex items-center justify-center select-none">
               <img
                 key={streamKey}
                 src={`${streamUrl}?t=${streamKey}`}
                 alt="YOLO 实时检测"
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain pointer-events-none"
                 onLoad={() => setStreamOnline(true)}
                 onError={() => setStreamOnline(false)}
               />
+              {isDrawingRoi && (
+                <svg
+                  viewBox="0 0 1000 1000"
+                  preserveAspectRatio="none"
+                  onClick={handleVideoRoiClick}
+                  className="absolute inset-0 w-full h-full cursor-crosshair z-20"
+                >
+                  <rect x="0" y="0" width="1000" height="1000" fill="rgba(0, 218, 243, 0.04)" />
+                  {roiPoints.length >= 2 && (
+                    <polygon
+                      points={roiPoints.map(([px, py]) => `${px * 1000},${py * 1000}`).join(' ')}
+                      fill="rgba(0, 230, 57, 0.22)"
+                      stroke="#00e639"
+                      strokeWidth="4"
+                      strokeDasharray={roiPoints.length < 3 ? '8 6' : undefined}
+                    />
+                  )}
+                  {roiPoints.map(([px, py], idx) => (
+                    <g key={idx}>
+                      <circle
+                        cx={px * 1000}
+                        cy={py * 1000}
+                        r="11"
+                        fill="#00daf3"
+                        stroke="#090d16"
+                        strokeWidth="3"
+                      />
+                      <text
+                        x={px * 1000 + 14}
+                        y={py * 1000 - 10}
+                        fill="#00daf3"
+                        fontSize="24"
+                        fontWeight="bold"
+                      >
+                        P{idx + 1}
+                      </text>
+                    </g>
+                  ))}
+                </svg>
+              )}
               {!streamOnline && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 pointer-events-none px-4 text-center">
                   <WifiOff className="w-8 h-8 text-on-surface-variant" />

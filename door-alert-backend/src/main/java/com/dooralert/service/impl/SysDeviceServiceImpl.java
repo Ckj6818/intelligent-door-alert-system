@@ -73,18 +73,33 @@ public class SysDeviceServiceImpl extends ServiceImpl<SysDeviceMapper, SysDevice
         if (deviceId == null || this.getById(deviceId) == null) {
             return false;
         }
-        EdgeConfigVO safe = config == null ? new EdgeConfigVO() : config;
-        if (safe.getDangerDistanceM() == null) {
-            safe.setDangerDistanceM(1.5);
-        }
-        if (safe.getCooldownSec() == null) {
-            safe.setCooldownSec(10);
-        }
-        if (safe.getFaceMatchThreshold() == null) {
-            safe.setFaceMatchThreshold(0.363);
-        }
-        if (safe.getTailgateEnabled() == null) {
-            safe.setTailgateEnabled(true);
+        EdgeConfigVO existing = getEdgeConfig(deviceId);
+        EdgeConfigVO safe = existing == null ? new EdgeConfigVO() : existing;
+        if (config != null) {
+            if (config.getDangerDistanceM() != null) {
+                safe.setDangerDistanceM(config.getDangerDistanceM());
+            }
+            if (config.getCooldownSec() != null) {
+                safe.setCooldownSec(config.getCooldownSec());
+            }
+            if (config.getFaceMatchThreshold() != null) {
+                safe.setFaceMatchThreshold(config.getFaceMatchThreshold());
+            }
+            if (config.getTailgateEnabled() != null) {
+                safe.setTailgateEnabled(config.getTailgateEnabled());
+            }
+            if (config.getYoloConfThreshold() != null) {
+                safe.setYoloConfThreshold(config.getYoloConfThreshold());
+            }
+            if (config.getLoiterSeconds() != null) {
+                safe.setLoiterSeconds(config.getLoiterSeconds());
+            }
+            if (config.getVideoSource() != null && !config.getVideoSource().trim().isEmpty()) {
+                safe.setVideoSource(config.getVideoSource().trim());
+            }
+            if (config.getRoiPolygon() != null) {
+                safe.setRoiPolygon(config.getRoiPolygon());
+            }
         }
         try {
             String json = objectMapper.writeValueAsString(safe);

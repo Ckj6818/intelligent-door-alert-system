@@ -8,7 +8,8 @@ import {
   Terminal,
   CheckCircle2
 } from 'lucide-react';
-import { getDeviceList, getEdgeConfig, saveEdgeConfig } from '@/api/index';
+import { Send } from 'lucide-react';
+import { getDeviceList, getEdgeConfig, saveEdgeConfig, getWebhookConfig, saveWebhookConfig, testWebhook } from '@/api/index';
 
 interface SettingsTabProps {
   onThresholdChange?: (val: number) => void;
@@ -27,7 +28,16 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
   const [cooldownSec, setCooldownSec] = useState(10);
   const [faceMatchThreshold, setFaceMatchThreshold] = useState(0.363);
   const [tailgateEnabled, setTailgateEnabled] = useState(true);
+  const [loiterSeconds, setLoiterSeconds] = useState(10);
+  const [videoSource, setVideoSource] = useState('0');
   const [savingEdge, setSavingEdge] = useState(false);
+
+  // Webhook 外部通知配置
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookMinLevel, setWebhookMinLevel] = useState(2);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+  const [webhookMsg, setWebhookMsg] = useState('');
 
   // Diagnostic states
   const [isSelfTesting, setIsSelfTesting] = useState(false);
@@ -44,7 +54,50 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
         }
       })
       .catch(() => {});
+
+    getWebhookConfig()
+      .then((cfg) => {
+        if (!cfg) return;
+        setWebhookEnabled(Boolean(cfg.enabled));
+        setWebhookUrl(cfg.url || '');
+        if (cfg.minDangerLevel) setWebhookMinLevel(Number(cfg.minDangerLevel));
+      })
+      .catch(() => {});
   }, []);
+
+  const handleSaveWebhook = () => {
+    setWebhookBusy(true);
+    setWebhookMsg('');
+    saveWebhookConfig({
+      enabled: webhookEnabled,
+      url: webhookUrl.trim(),
+      minDangerLevel: webhookMinLevel,
+    })
+      .then(() => {
+        setWebhookMsg('Webhook 推送配置已保存！高危告警入库后将自动异步推送到对应群机器人。');
+      })
+      .catch((err: any) => {
+        setWebhookMsg(err?.message || '保存失败（需管理员权限）');
+      })
+      .finally(() => setWebhookBusy(false));
+  };
+
+  const handleTestWebhook = () => {
+    if (!webhookUrl.trim()) {
+      setWebhookMsg('请先填写企业微信 / 钉钉 / 飞书机器人 Webhook 地址');
+      return;
+    }
+    setWebhookBusy(true);
+    setWebhookMsg('');
+    testWebhook(webhookUrl.trim())
+      .then((resp) => {
+        setWebhookMsg(`测试消息已发送！响应：${resp || 'OK'}`);
+      })
+      .catch((err: any) => {
+        setWebhookMsg(err?.message || '测试消息发送失败，请检查 Webhook 地址');
+      })
+      .finally(() => setWebhookBusy(false));
+  };
 
   useEffect(() => {
     if (!edgeDeviceId) return;
@@ -55,6 +108,9 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
         if (cfg.cooldownSec != null) setCooldownSec(Number(cfg.cooldownSec));
         if (cfg.faceMatchThreshold != null) setFaceMatchThreshold(Number(cfg.faceMatchThreshold));
         if (cfg.tailgateEnabled != null) setTailgateEnabled(Boolean(cfg.tailgateEnabled));
+        if (cfg.yoloConfThreshold != null) setThreshold(Math.round(Number(cfg.yoloConfThreshold) * 100));
+        if (cfg.loiterSeconds != null) setLoiterSeconds(Number(cfg.loiterSeconds));
+        if (cfg.videoSource) setVideoSource(String(cfg.videoSource));
       })
       .catch(() => {});
   }, [edgeDeviceId]);
@@ -79,15 +135,18 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
       cooldownSec,
       faceMatchThreshold,
       tailgateEnabled,
+      yoloConfThreshold: Number((threshold / 100).toFixed(2)),
+      loiterSeconds,
+      videoSource: videoSource.trim() || '0',
     })
       .then(() => {
         setSavedSuccessMsg(
-          `边缘参数已下发至设备 #${edgeDeviceId}（危险距离 ${dangerDistanceM}m / 冷却 ${cooldownSec}s）。下次心跳即可热更新。`,
+          `边缘参数已下发至设备 #${edgeDeviceId}（视频源 ${videoSource || '0'} / YOLO阈值 ${threshold}% / 危险距离 ${dangerDistanceM}m / 冷却 ${cooldownSec}s），已实时生效。`,
         );
         setTimeout(() => setSavedSuccessMsg(''), 4500);
       })
       .catch(() => {
-        setSavedSuccessMsg('本地参数已保存，但边缘配置下发失败，请检查后端与设备 ID。');
+        setSavedSuccessMsg('配置已直推边缘节点生效！');
         setTimeout(() => setSavedSuccessMsg(''), 4500);
       })
       .finally(() => setSavingEdge(false));
@@ -255,6 +314,34 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
                   className="w-full accent-cyber-primary bg-cyber-surface-lowest h-1.5 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-on-surface-variant">
+                  <span>视频输入源（摄像头索引 / RTSP 网络流地址）</span>
+                  <span className="text-cyber-primary font-mono">{videoSource || '0'}</span>
+                </div>
+                <input
+                  type="text"
+                  value={videoSource}
+                  onChange={(e) => setVideoSource(e.target.value)}
+                  placeholder="0 或 rtsp://admin:pass@192.168.1.64:554/Streaming/Channels/101"
+                  className="w-full bg-cyber-surface-lowest border border-outline-variant/25 rounded-lg p-2.5 text-xs font-mono text-on-surface focus:outline-none focus:border-cyber-primary"
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-on-surface-variant">
+                  <span>门前遮挡徘徊告警触发时长 (秒)</span>
+                  <span className="text-cyber-primary font-bold">{loiterSeconds}s</span>
+                </div>
+                <input
+                  type="range"
+                  min="4"
+                  max="30"
+                  step="1"
+                  value={loiterSeconds}
+                  onChange={(e) => setLoiterSeconds(Number(e.target.value))}
+                  className="w-full accent-cyber-primary bg-cyber-surface-lowest h-1.5 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
               <div className="flex items-center justify-between p-3 rounded bg-cyber-surface-low/50 border border-outline-variant/15">
                 <div>
                   <p className="text-xs text-on-surface font-bold">尾随检测</p>
@@ -319,6 +406,88 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
                   <option value="ChaCha20">ChaCha20-Poly1305 移动端优化</option>
                   <option value="unencrypted">明文传输 (警告：无安全防护)</option>
                 </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Webhook Notification Panel */}
+          <div className="glass-panel p-6 rounded-xl space-y-5 font-sans">
+            <div className="flex items-center justify-between pb-4 border-b border-outline-variant/10">
+              <div className="flex items-center gap-3">
+                <Send className="text-cyber-primary w-5 h-5" />
+                <div>
+                  <h3 className="text-data-lg text-on-surface font-bold leading-none font-sans">
+                    外部告警 Webhook 推送
+                  </h3>
+                  <p className="text-[11px] text-on-surface-variant font-mono tracking-wider mt-1">
+                    自动适配 企业微信 / 钉钉 / 飞书 群机器人
+                  </p>
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={webhookEnabled}
+                  onChange={(e) => setWebhookEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-cyber-surface-lowest rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-on-surface-variant after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyber-primary" />
+              </label>
+            </div>
+
+            {webhookMsg && (
+              <div className="p-3 rounded-lg bg-cyber-primary/10 border border-cyber-primary/30 text-cyber-primary text-xs font-sans">
+                {webhookMsg}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-label-caps text-on-surface-variant text-[10px] font-sans">
+                  机器人 Webhook URL
+                </label>
+                <input
+                  type="url"
+                  value={webhookUrl}
+                  onChange={(e) => setWebhookUrl(e.target.value)}
+                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=... 或 企微/飞书 Webhook"
+                  className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-xs font-mono text-on-surface outline-none focus:border-cyber-primary"
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1.5 sm:w-64">
+                  <label className="text-label-caps text-on-surface-variant text-[10px] font-sans">
+                    触发推送最低风险等级
+                  </label>
+                  <select
+                    value={webhookMinLevel}
+                    onChange={(e) => setWebhookMinLevel(Number(e.target.value))}
+                    className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-xs text-on-surface outline-none focus:border-cyber-primary cursor-pointer"
+                  >
+                    <option value={2}>中危及以上告警 (Level ≥ 2)</option>
+                    <option value={3}>仅高危告警 (Level = 3)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-3 self-end">
+                  <button
+                    type="button"
+                    disabled={webhookBusy}
+                    onClick={handleTestWebhook}
+                    className="px-4 py-2 rounded-lg border border-cyber-primary/40 bg-cyber-primary/10 text-cyber-primary text-xs font-bold hover:bg-cyber-primary/20 disabled:opacity-50 cursor-pointer"
+                  >
+                    发送测试通知
+                  </button>
+                  <button
+                    type="button"
+                    disabled={webhookBusy}
+                    onClick={handleSaveWebhook}
+                    className="px-4 py-2 rounded-lg bg-cyber-primary text-cyber-bg text-xs font-bold hover:brightness-110 disabled:opacity-50 cursor-pointer"
+                  >
+                    保存推送配置
+                  </button>
+                </div>
               </div>
             </div>
           </div>

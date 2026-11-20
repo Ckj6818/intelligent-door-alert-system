@@ -10,15 +10,19 @@ import com.dooralert.entity.PassageLog;
 import com.dooralert.mapper.AlertLogMapper;
 import com.dooralert.service.AlertLogService;
 import com.dooralert.service.PassageLogService;
+import com.dooralert.service.WebhookNotifyService;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
@@ -33,6 +37,12 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Autowired
     private PassageLogService passageLogService;
+
+    @Autowired
+    private WebhookNotifyService webhookNotifyService;
+
+    @Value("${alert.recycle.retention-hours:168}")
+    private int recycleRetentionHours;
 
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
@@ -122,7 +132,7 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
         log.info("未授权告警已入库(待处理工单): id={}, name={}", entity.getId(), recognizedName);
 
-        return AlertWsPayload.builder()
+        AlertWsPayload payload = AlertWsPayload.builder()
                 .alertId(entity.getId())
                 .authStatus(entity.getAuthStatus())
                 .recognizedName(entity.getRecognizedName())
@@ -135,6 +145,8 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
                 .deviceId(entity.getDeviceId())
                 .status(entity.getStatus())
                 .build();
+        webhookNotifyService.sendAlertAsync(payload);
+        return payload;
     }
 
     /**
@@ -321,6 +333,29 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
         this.remove(wrapper);
         deleteSnapshotFiles(toDelete);
         return true;
+    }
+
+    /**
+     * 定时自动清理超过保留期（默认 168 小时 / 7 天）的回收站记录及关联抓拍文件
+     */
+    @Scheduled(fixedDelay = 3600_000, initialDelay = 60_000)
+    public void autoPurgeExpiredRecycleBin() {
+        if (recycleRetentionHours <= 0) {
+            return;
+        }
+        LocalDateTime cutoff = LocalDateTime.now().minusHours(recycleRetentionHours);
+        com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AlertLog> wrapper =
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<>();
+        wrapper.eq(AlertLog::getDeleted, 1)
+                .isNotNull(AlertLog::getDeleteTime)
+                .le(AlertLog::getDeleteTime, cutoff);
+        List<AlertLog> expired = this.list(wrapper);
+        if (expired == null || expired.isEmpty()) {
+            return;
+        }
+        this.remove(wrapper);
+        deleteSnapshotFiles(expired);
+        log.info("定时清理过期回收站告警 {} 条（保留策略: {}h）", expired.size(), recycleRetentionHours);
     }
 
     /**

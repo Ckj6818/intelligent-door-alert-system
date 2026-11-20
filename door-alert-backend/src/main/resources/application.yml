@@ -33,3 +33,16 @@ sa-token:
 device:
   heartbeat:
     timeout-seconds: 30
+
+# 边缘节点通信共享密钥（留空则不强制校验，方便本地开发）
+edge:
+  api-token: ${EDGE_API_TOKEN:}
+
+# 回收站逻辑删除记录自动物理清理周期（小时，默认 168 小时 = 7 天）
+alert:
+  recycle:
+    retention-hours: ${ALERT_RECYCLE_RETENTION_HOURS:168}
+  webhook:
+    enabled: ${ALERT_WEBHOOK_ENABLED:false}
+    url: ${ALERT_WEBHOOK_URL:}
+    min-danger-level: ${ALERT_WEBHOOK_MIN_DANGER_LEVEL:2}

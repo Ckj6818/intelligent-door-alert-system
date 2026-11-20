@@ -249,12 +249,25 @@ export function getEdgeConfig(deviceId = 1): Promise<any> {
   });
 }
 
-export function saveEdgeConfig(deviceId: number, data: {
-  dangerDistanceM: number;
-  cooldownSec: number;
-  faceMatchThreshold: number;
-  tailgateEnabled: boolean;
-}): Promise<any> {
+export interface EdgeConfigPayload {
+  dangerDistanceM?: number;
+  cooldownSec?: number;
+  faceMatchThreshold?: number;
+  tailgateEnabled?: boolean;
+  yoloConfThreshold?: number;
+  loiterSeconds?: number;
+  videoSource?: string;
+  roiPolygon?: number[][];
+}
+
+export function saveEdgeConfig(deviceId: number, data: EdgeConfigPayload): Promise<any> {
+  // 异步直推边缘端本地 HTTP 接口（<50ms 立即生效），同时落库持久化供心跳同步
+  fetch('/video-stream/apply-config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }).catch(() => {});
+
   return request({
     url: `/devices/${deviceId}/edge-config`,
     method: 'put',
@@ -274,5 +287,34 @@ export function getPassageTodayStats(): Promise<any> {
   return request({
     url: '/passages/stats/today',
     method: 'get',
+  });
+}
+
+export interface WebhookConfigPayload {
+  enabled: boolean;
+  url: string;
+  minDangerLevel: number;
+}
+
+export function getWebhookConfig(): Promise<WebhookConfigPayload> {
+  return request({
+    url: '/webhook/config',
+    method: 'get',
+  });
+}
+
+export function saveWebhookConfig(data: WebhookConfigPayload): Promise<WebhookConfigPayload> {
+  return request({
+    url: '/webhook/config',
+    method: 'put',
+    data,
+  });
+}
+
+export function testWebhook(url?: string): Promise<string> {
+  return request({
+    url: '/webhook/test',
+    method: 'post',
+    data: url ? { url } : {},
   });
 }
