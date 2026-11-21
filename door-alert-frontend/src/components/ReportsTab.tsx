@@ -472,14 +472,27 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
         <section className="space-y-4 font-sans">
           <h2 className="text-headline-lg text-on-surface font-sans">全球安防节点</h2>
           <div className="glass-panel rounded-xl h-[360px] relative overflow-hidden flex flex-col justify-between">
-            {/* Styled Map background illustration */}
-            <div 
-              className="absolute inset-0 bg-cover bg-center mix-blend-screen opacity-70"
-              style={{ 
-                backgroundImage: `url('https://lh3.googleusercontent.com/aida-public/AB6AXuCr5ZnAVyf2DOkSmfKgCxniMW2XQgNG0ME0C-7JJ37xn7qQrA7EbaudkorAtXBA8awpWMgETQrsgc1G8fX0b69ibOfxaMJp_12SQYYZsDWkOqPRIRLsWP0_v7SY6PiyKvhCJJj4BKlEe9d8VoOugj9no6YXESZ4aKGTTgy5IPAcL0d2xZf7_283HJWRHUQiDAkJeBidMb7sWkfjFPDsPcYPlzyPXeD70EGnVQSPDb48yqxu6QW9bZXb')` 
-              }}
-              aria-label="Stylized world Map with nodes"
-            />
+            {/* 本地离线赛博雷达网格背景（无外网图片依赖） */}
+            <svg
+              className="absolute inset-0 w-full h-full opacity-35 pointer-events-none"
+              viewBox="0 0 400 360"
+              preserveAspectRatio="xMidYMid slice"
+              aria-label="Cyber security radar grid"
+            >
+              <defs>
+                <pattern id="cyber-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                  <path d="M 28 0 L 0 0 0 28" fill="none" stroke="rgba(0,218,243,0.18)" strokeWidth="0.7" />
+                </pattern>
+              </defs>
+              <rect width="400" height="360" fill="url(#cyber-grid)" />
+              <circle cx="200" cy="145" r="45" fill="none" stroke="rgba(0,218,243,0.35)" strokeWidth="1" />
+              <circle cx="200" cy="145" r="95" fill="none" stroke="rgba(0,218,243,0.22)" strokeWidth="1" strokeDasharray="4 4" />
+              <circle cx="200" cy="145" r="145" fill="none" stroke="rgba(0,230,57,0.18)" strokeWidth="1" />
+              <line x1="200" y1="0" x2="200" y2="290" stroke="rgba(0,218,243,0.18)" strokeWidth="0.8" />
+              <line x1="30" y1="145" x2="370" y2="145" stroke="rgba(0,218,243,0.18)" strokeWidth="0.8" />
+              <line x1="200" y1="145" x2="133" y2="180" stroke="rgba(0,230,57,0.5)" strokeWidth="1.2" strokeDasharray="3 3" />
+              <line x1="200" y1="145" x2="100" y2="90" stroke="rgba(255,59,48,0.45)" strokeWidth="1.2" strokeDasharray="3 3" />
+            </svg>
             {/* Ambient vector glow points */}
             <div className="absolute top-1/3 left-1/2 w-3 h-3 bg-cyber-primary rounded-full animate-ping pointer-events-none" />
             <div className="absolute top-1/2 left-1/3 w-2.5 h-2.5 bg-cyber-secondary rounded-full animate-ping pointer-events-none" />

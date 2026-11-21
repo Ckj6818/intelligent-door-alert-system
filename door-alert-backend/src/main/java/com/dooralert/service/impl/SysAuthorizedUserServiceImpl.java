@@ -55,8 +55,34 @@ public class SysAuthorizedUserServiceImpl
             throw new RuntimeException("姓名不能为空");
         }
 
-        String avatarUrl = saveAvatarFiles(name, avatar);
+        String avatarUrl = saveAvatarFiles(name, avatar, "replace", true);
         return persistUser(dto, avatarUrl);
+    }
+
+    @Override
+    public SysAuthorizedUserVO updateAvatar(Long id, MultipartFile avatar, String mode) {
+        if (id == null) {
+            throw new RuntimeException("人员 ID 不能为空");
+        }
+        if (avatar == null || avatar.isEmpty()) {
+            throw new RuntimeException("请先选择或抓拍清晰人脸照片");
+        }
+        SysAuthorizedUser entity = this.getById(id);
+        if (entity == null) {
+            throw new RuntimeException("授权人员不存在: " + id);
+        }
+
+        boolean appendMode = "append".equalsIgnoreCase(mode) && countFaceFiles(entity.getName()) > 0;
+        boolean triggerReload = Integer.valueOf(1).equals(entity.getStatus());
+        String uploadedUrl = saveAvatarFiles(entity.getName(), avatar, appendMode ? "append" : "replace", triggerReload);
+
+        if (!appendMode || !StringUtils.hasText(entity.getAvatarUrl())) {
+            entity.setAvatarUrl(uploadedUrl);
+            this.updateById(entity);
+        }
+        log.info("已{}授权人员人脸底库: id={}, name={}, mode={}",
+                appendMode ? "追加" : "更新", id, entity.getName(), appendMode ? "append" : "replace");
+        return toVO(entity);
     }
 
     @Override
@@ -131,10 +157,10 @@ public class SysAuthorizedUserServiceImpl
 
     /**
      * 同时写入：
-     * - {user.dir}/uploads/xxx.jpg  → Web 访问 /uploads/xxx.jpg
-     * - ../door-alert-ai/authorized_faces/{姓名}.ext → AI 人脸库
+     * - {user.dir}/uploads/xxx.jpg → Web 访问 /uploads/xxx.jpg
+     * - authorized_faces/{姓名}.ext 或 authorized_faces/{姓名}_{ts}.ext → AI 人脸库
      */
-    private String saveAvatarFiles(String name, MultipartFile avatar) {
+    private String saveAvatarFiles(String name, MultipartFile avatar, String mode, boolean triggerReload) {
         try {
             String original = avatar.getOriginalFilename();
             String suffix = ".jpg";
@@ -151,15 +177,24 @@ public class SysAuthorizedUserServiceImpl
             Path uploadPath = uploadDir.resolve(storedName);
             avatar.transferTo(uploadPath.toFile());
 
-            // 同步到边缘 AI 人脸目录（文件名=姓名）
+            // 同步到边缘 AI 人脸目录
             Path facesDir = resolveAuthorizedFacesDir();
             Files.createDirectories(facesDir);
             String safeName = sanitizeName(name);
-            Path facePath = facesDir.resolve(safeName + suffix);
+            String targetFileName;
+            if ("append".equalsIgnoreCase(mode)) {
+                targetFileName = safeName + "_" + System.currentTimeMillis() + suffix;
+            } else {
+                removeFaceFiles(name);
+                targetFileName = safeName + suffix;
+            }
+            Path facePath = facesDir.resolve(targetFileName);
             Files.copy(uploadPath, facePath, StandardCopyOption.REPLACE_EXISTING);
-            touchReloadFlag();
+            if (triggerReload) {
+                touchReloadFlag();
+            }
 
-            log.info("人脸照片已同步: uploads={}, faces={}", uploadPath, facePath);
+            log.info("人脸照片已同步: uploads={}, faces={}, mode={}", uploadPath, facePath, mode);
             return "/uploads/" + storedName;
         } catch (RuntimeException e) {
             throw e;
@@ -205,22 +240,50 @@ public class SysAuthorizedUserServiceImpl
         }
     }
 
+    private boolean isUserFaceFile(Path p, String safeName) {
+        if (!Files.isRegularFile(p)) {
+            return false;
+        }
+        String fname = p.getFileName().toString();
+        if (fname.startsWith(".")) {
+            return false;
+        }
+        int dot = fname.lastIndexOf('.');
+        String stem = dot > 0 ? fname.substring(0, dot) : fname;
+        return stem.equals(safeName) || stem.startsWith(safeName + "_");
+    }
+
+    private int countFaceFiles(String name) {
+        Path facesDir = resolveAuthorizedFacesDir();
+        if (!Files.isDirectory(facesDir)) {
+            return 0;
+        }
+        String safeName = sanitizeName(name);
+        try (var stream = Files.list(facesDir)) {
+            return (int) stream.filter(p -> isUserFaceFile(p, safeName)).count();
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
     private void removeFaceFiles(String name) {
         Path facesDir = resolveAuthorizedFacesDir();
         if (!Files.isDirectory(facesDir)) {
             return;
         }
         String safeName = sanitizeName(name);
-        String[] exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"};
-        for (String ext : exts) {
-            Path p = facesDir.resolve(safeName + ext);
-            try {
-                if (Files.deleteIfExists(p)) {
-                    log.info("已移除边缘人脸文件: {}", p);
+        try (var stream = Files.list(facesDir)) {
+            stream.filter(p -> isUserFaceFile(p, safeName)).forEach(p -> {
+                try {
+                    if (Files.deleteIfExists(p)) {
+                        log.info("已移除边缘人脸文件: {}", p);
+                    }
+                } catch (IOException e) {
+                    log.warn("移除边缘人脸失败: {} ({})", p, e.getMessage());
                 }
-            } catch (IOException e) {
-                log.warn("移除边缘人脸失败: {} ({})", p, e.getMessage());
-            }
+            });
+        } catch (IOException e) {
+            log.warn("扫描边缘人脸目录失败: {}", e.getMessage());
         }
     }
 
@@ -261,6 +324,7 @@ public class SysAuthorizedUserServiceImpl
     private SysAuthorizedUserVO toVO(SysAuthorizedUser entity) {
         SysAuthorizedUserVO vo = new SysAuthorizedUserVO();
         BeanUtils.copyProperties(entity, vo);
+        vo.setFaceTemplateCount(countFaceFiles(entity.getName()));
         return vo;
     }
 }

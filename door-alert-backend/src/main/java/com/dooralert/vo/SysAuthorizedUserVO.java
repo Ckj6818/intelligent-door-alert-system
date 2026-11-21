@@ -16,5 +16,7 @@ public class SysAuthorizedUserVO {
     private String department;
     private String avatarUrl;
     private Integer status;
+    /** 边缘 authorized_faces/ 目录中该人员的底库照片张数 */
+    private Integer faceTemplateCount;
     private LocalDateTime createTime;
 }

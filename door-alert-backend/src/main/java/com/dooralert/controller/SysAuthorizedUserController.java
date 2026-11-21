@@ -90,6 +90,25 @@ public class SysAuthorizedUserController {
     }
 
     /**
+     * 补录或更新已有授权人员的人脸底库照片（支持 replace 替换主正脸 / append 追加多角度照）
+     */
+    @PostMapping(value = "/{id}/avatar", consumes = "multipart/form-data")
+    @SaCheckRole("ADMIN")
+    public Result<SysAuthorizedUserVO> updateAvatar(
+            @PathVariable Long id,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "mode", required = false, defaultValue = "replace") String mode) {
+        try {
+            String tip = "append".equalsIgnoreCase(mode)
+                    ? "已追加多角度人脸照片，边缘识别库热加载中"
+                    : "已更新主正脸照片，边缘识别库热加载中";
+            return Result.success(tip, sysAuthorizedUserService.updateAvatar(id, file, mode));
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
      * 删除授权人员（同步移除边缘人脸）
      */
     @DeleteMapping("/{id}")

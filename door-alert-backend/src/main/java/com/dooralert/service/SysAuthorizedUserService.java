@@ -29,6 +29,13 @@ public interface SysAuthorizedUserService extends IService<SysAuthorizedUser> {
     SysAuthorizedUserVO updateStatus(Long id, Integer status);
 
     /**
+     * 补录或更新已有授权人员的人脸底库照片：
+     * mode="replace" 替换主正脸照并清除旧衍生模板；
+     * mode="append"  追加一张多角度/实景底库照（姓名_时间戳.ext）。
+     */
+    SysAuthorizedUserVO updateAvatar(Long id, MultipartFile avatar, String mode);
+
+    /**
      * 删除授权人员，同时移除边缘人脸文件并触发 AI 热加载。
      */
     void deleteAuthorizedUser(Long id);

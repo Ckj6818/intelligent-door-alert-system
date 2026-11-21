@@ -222,6 +222,18 @@ export function addAuthorizedUserWithAvatar(form: FormData): Promise<any> {
 }
 
 /**
+ * 补录/更新已有授权人员的人脸底库照片（mode=replace|append）
+ */
+export function updateAuthorizedUserAvatar(id: number, form: FormData): Promise<any> {
+  return request({
+    url: `/authorized-users/${id}/avatar`,
+    method: 'post',
+    data: form,
+    timeout: 30000,
+  });
+}
+
+/**
  * 启用/禁用授权人员（同步边缘人脸库）
  */
 export function updateAuthorizedUserStatus(id: number, status: 0 | 1): Promise<any> {

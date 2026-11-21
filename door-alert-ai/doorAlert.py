@@ -249,6 +249,7 @@ STREAM_FPS = float(os.environ.get("STREAM_FPS", "8"))
 
 _stream_lock = threading.Lock()
 _stream_jpeg = None  # 最新一帧 JPEG bytes，供 MJPEG 推送
+_stream_clean_bgr = None  # 最新一帧无框原始 BGR，供管理端 /snapshot 白名单录入抓拍
 
 # ================= 人脸识别 / 接近度门控 =================
 FACE_DISTANCE_THRESHOLD = float(os.environ.get("FACE_DISTANCE_THRESHOLD", "0.55"))
@@ -263,12 +264,13 @@ PROX_W_D = float(os.environ.get("PROX_W_D", "0.25"))
 # 默认几乎全图；例如 "0.15,0.35,0.85,1.0" 表示画面下方门前区域
 _ROI_RAW = os.environ.get("ALERT_ROI_NORM", "0.0,0.25,1.0,1.0").strip()
 USE_BYTETRACK = os.environ.get("USE_BYTETRACK", "1").strip() in ("1", "true", "yes")
-# 人脸质量：最小边长(px)、Laplacian 清晰度下限、姿态对称度上限（越小越正脸）
+# 人脸质量：最小边长(px)、Laplacian 清晰度下限、姿态对称度上限（越小越正脸）、眼距/脸宽下限
 FACE_MIN_SIDE = int(os.environ.get("FACE_MIN_SIDE", "48"))
 FACE_MIN_SHARPNESS = float(os.environ.get("FACE_MIN_SHARPNESS", "35.0"))
-FACE_MAX_YAW_ASYM = float(os.environ.get("FACE_MAX_YAW_ASYM", "0.28"))
+FACE_MAX_YAW_ASYM = float(os.environ.get("FACE_MAX_YAW_ASYM", "0.20"))
+FACE_MIN_EYE_SPAN_RATIO = float(os.environ.get("FACE_MIN_EYE_SPAN_RATIO", "0.32"))
 # track 投票窗口长度；授权锁定后保持身份
-TRACK_VOTE_WINDOW = int(os.environ.get("TRACK_VOTE_WINDOW", "5"))
+TRACK_VOTE_WINDOW = int(os.environ.get("TRACK_VOTE_WINDOW", "6"))
 TRACK_LOCK_AUTH = os.environ.get("TRACK_LOCK_AUTH", "1").strip() in ("1", "true", "yes")
 # 人脸比对最小间隔（秒）
 FACE_CHECK_INTERVAL = float(os.environ.get("FACE_CHECK_INTERVAL", "0.12"))
@@ -292,13 +294,13 @@ SFACE_MODEL_PATH = os.environ.get(
 )
 # SFace 余弦相似度：>= 授权；<= 明确陌生人；中间为「识别中」不告警
 SFACE_COSINE_THRESHOLD = float(os.environ.get("SFACE_COSINE_THRESHOLD", "0.363"))
-SFACE_REJECT_THRESHOLD = float(os.environ.get("SFACE_REJECT_THRESHOLD", "0.28"))
+SFACE_REJECT_THRESHOLD = float(os.environ.get("SFACE_REJECT_THRESHOLD", "0.22"))
 # 高置信授权可立刻通行（无需多帧）
 SFACE_STRONG_AUTH = float(os.environ.get("SFACE_STRONG_AUTH", "0.45"))
 # dlib：距离越小越像；超过 REJECT 才算明确陌生人
 FACE_REJECT_DISTANCE = float(os.environ.get("FACE_REJECT_DISTANCE", "0.70"))
 # 多帧确认：抑制走近时侧脸误报未授权
-UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "3"))
+UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "5"))
 AUTH_CONFIRM_FRAMES = int(os.environ.get("AUTH_CONFIRM_FRAMES", "2"))
 
 # ================= 性能优化项 =================
@@ -884,8 +886,7 @@ def load_authorized_faces(folder=None):
         print(f"[WARN] 授权人脸目录 {folder} 中没有图片，人脸对比将不可用")
         return known_encodings, known_names
 
-    print(f"[INFO] 正在加载授权人脸库（共 {len(files)} 张照片，含水平翻转模板）...")
-    people = 0
+    print(f"[INFO] 正在加载授权人脸库（共 {len(files)} 张照片，含水平翻转与多角度同人合并）...")
     for file in files:
         filepath = os.path.join(folder, file)
         try:
@@ -893,7 +894,9 @@ def load_authorized_faces(folder=None):
             if bgr is None:
                 print(f"  ✗ 无法读取: {file}")
                 continue
-            name = os.path.splitext(file)[0]
+            raw_name = os.path.splitext(file)[0]
+            # 支持 "陈柯杰_2.jpg" / "陈柯杰_侧脸.jpg" 自动合并到同一授权人员 "陈柯杰"
+            name = raw_name.split("_", 1)[0].strip() or raw_name
             templates = []
             for tag, img in (("原图", bgr), ("翻转", cv2.flip(bgr, 1))):
                 encoding = _encoding_from_bgr(img, face_recognition)
@@ -907,13 +910,13 @@ def load_authorized_faces(folder=None):
                 for enc in templates:
                     known_encodings.append(enc)
                     known_names.append(name)
-                people += 1
-                print(f"  ✓ 已加载: {name}（{len(templates)} 模板）")
+                print(f"  ✓ 已加载: {name} <- {file}（{len(templates)} 模板）")
             else:
                 print(f"  ✗ 未检测到人脸: {file}（请更换清晰正脸照片）")
         except Exception as exc:
             print(f"  ✗ 加载失败: {file} -> {exc}")
 
+    people = len(set(known_names))
     print(
         f"[INFO] 授权人脸库加载完成，共 {people} 人 / {len(known_encodings)} 条模板特征"
     )
@@ -1376,6 +1379,11 @@ def _assess_face_quality(bgr_roi, face_row):
     except (IndexError, TypeError, ValueError):
         return False, "landmarks"
     eye_span = abs(le_x - re_x) + 1e-5
+    if (eye_span / (fw + 1e-5)) < FACE_MIN_EYE_SPAN_RATIO:
+        return False, "pose"
+    min_ex, max_ex = min(re_x, le_x), max(re_x, le_x)
+    if nt_x <= min_ex + 0.08 * eye_span or nt_x >= max_ex - 0.08 * eye_span:
+        return False, "pose"
     mid_eye_x = (le_x + re_x) * 0.5
     yaw_asym = abs(nt_x - mid_eye_x) / eye_span
     mouth_span = abs(lcm_x - rcm_x) + 1e-5
@@ -2170,6 +2178,18 @@ def resolve_heartbeat_url():
 BACKEND_HEARTBEAT_URL = resolve_heartbeat_url()
 
 
+def update_clean_frame(frame_bgr):
+    """保存最新一帧无框原图，供管理端 /snapshot 一键抓拍白名单照片。"""
+    global _stream_clean_bgr
+    if frame_bgr is None or frame_bgr.size == 0:
+        return
+    try:
+        with _stream_lock:
+            _stream_clean_bgr = frame_bgr.copy()
+    except Exception:
+        pass
+
+
 def update_stream_frame(frame_bgr):
     """把 YOLO 画框后的画面编码为 JPEG，供前端 MJPEG 实时预览。"""
     global _stream_jpeg
@@ -2214,6 +2234,7 @@ def start_mjpeg_server():
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Expose-Headers", "X-Face-Detected, X-Face-Quality")
             self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
 
@@ -2273,6 +2294,41 @@ def start_mjpeg_server():
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if path == "/snapshot":
+                with _stream_lock:
+                    clean_bgr = _stream_clean_bgr.copy() if _stream_clean_bgr is not None else None
+                    fallback_jpeg = _stream_jpeg
+                if clean_bgr is None and fallback_jpeg:
+                    arr = np.frombuffer(fallback_jpeg, dtype=np.uint8)
+                    clean_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if clean_bgr is None:
+                    self.send_response(503)
+                    self._cors()
+                    self.end_headers()
+                    return
+                face_row = _yunet_best_face_row(clean_bgr)
+                face_detected = "1" if face_row is not None else "0"
+                if face_row is not None:
+                    q_ok, q_reason = _assess_face_quality(clean_bgr, face_row)
+                    face_quality = "ok" if q_ok else str(q_reason or "pose")
+                else:
+                    face_quality = "noface"
+                try:
+                    jpg_bytes = frame_to_jpeg_bytes(clean_bgr, quality=92)
+                except Exception:
+                    self.send_response(500)
+                    self._cors()
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self._cors()
+                self.send_header("X-Face-Detected", face_detected)
+                self.send_header("X-Face-Quality", face_quality)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(jpg_bytes)))
+                self.end_headers()
+                self.wfile.write(jpg_bytes)
                 return
             if path != "/video":
                 self.send_response(404)
@@ -3523,6 +3579,7 @@ def main():
             continue
 
         frame_clean = frame.copy()
+        update_clean_frame(frame_clean)
 
         with frame_lock:
             latest_frame = frame_clean.copy()

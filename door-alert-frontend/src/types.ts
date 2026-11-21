@@ -67,6 +67,7 @@ export interface AuthorizedUser {
   department?: string;
   avatarUrl?: string;
   status: number;
+  faceTemplateCount?: number;
   createTime?: string;
 }
 

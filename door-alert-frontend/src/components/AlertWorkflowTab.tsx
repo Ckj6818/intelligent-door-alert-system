@@ -95,6 +95,7 @@ export default function AlertWorkflowTab({
   setLiveFeed
 }: AlertWorkflowTabProps) {
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
@@ -240,15 +241,31 @@ export default function AlertWorkflowTab({
     }
   };
 
-  // Filter list rows based on search input and status drop-down
+  // Filter list rows based on search input, status, and alertType drop-downs
   const filteredAlerts = alerts.filter(al => {
-    const matchesSearch = al.device.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          al.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          al.status.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    if (filterStatus === 'all') return matchesSearch;
-    return matchesSearch && al.status.toLowerCase().replace(' ', '_') === filterStatus;
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      !q ||
+      al.device.toLowerCase().includes(q) ||
+      al.type.toLowerCase().includes(q) ||
+      al.status.toLowerCase().includes(q) ||
+      (al.recognizedName || '').toLowerCase().includes(q);
+
+    const matchesStatus = filterStatus === 'all' || al.status === filterStatus;
+    const alType = (al.alertType || 'INTRUSION').toUpperCase();
+    const matchesType = filterType === 'all' || alType === filterType;
+    return matchesSearch && matchesStatus && matchesType;
   });
+
+  // 真实动态统计横幅指标
+  const totalAlertCount = alerts.length;
+  const handledAlertCount = alerts.filter(al => al.status === '已处理').length;
+  const handleRateText = totalAlertCount > 0
+    ? `${((handledAlertCount / totalAlertCount) * 100).toFixed(1)}%`
+    : '100%';
+  const avgConfidenceText = totalAlertCount > 0
+    ? `${((alerts.reduce((sum, al) => sum + (Number(al.areaRatio ?? al.confidence) || 0), 0) / totalAlertCount) * 100).toFixed(1)}%`
+    : '--';
 
   // 分页状态管理与动态切片计算
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -269,17 +286,36 @@ export default function AlertWorkflowTab({
             管理历史遥测数据及 YOLOv8 目标分类识别日志。
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <div className="relative">
+            <select
+              value={filterType}
+              onChange={(e) => {
+                setFilterType(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="px-4 py-2 bg-cyber-surface-high border border-outline-variant/30 text-data-sm font-sans text-on-surface hover:bg-cyber-surface-highest transition-all rounded outline-none focus:border-cyber-primary/40 appearance-none cursor-pointer pr-10"
+            >
+              <option value="all">所有告警类型</option>
+              <option value="INTRUSION">未授权入侵 (INTRUSION)</option>
+              <option value="TAILGATING">尾随闯入 (TAILGATING)</option>
+              <option value="LOITERING">门前徘徊 (LOITERING)</option>
+            </select>
+            <Filter className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
+          </div>
+
           <div className="relative">
             <select
               value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                setCurrentPage(1);
+              }}
               className="px-4 py-2 bg-cyber-surface-high border border-outline-variant/30 text-data-sm font-sans text-on-surface hover:bg-cyber-surface-highest transition-all rounded outline-none focus:border-cyber-primary/40 appearance-none cursor-pointer pr-10"
             >
               <option value="all">所有状态</option>
-              <option value="pending_review">待复核警报</option>
-              <option value="auto-cleared">已处理事件</option>
-              <option value="investigating">深度调查中</option>
+              <option value="待复核">待复核警报</option>
+              <option value="已处理">已处理事件</option>
             </select>
             <Filter className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
           </div>
@@ -303,15 +339,15 @@ export default function AlertWorkflowTab({
           <div className="flex gap-12">
             <div>
               <span className="text-on-surface-variant/70 text-label-caps text-[10px]">警报处置率</span>
-              <div className="text-cyber-primary font-mono text-2xl font-bold">98.4%</div>
+              <div className="text-cyber-primary font-mono text-2xl font-bold">{handleRateText}</div>
             </div>
             <div>
-              <span className="text-on-surface-variant/70 text-label-caps text-[10px]">平均识别置信度</span>
-              <div className="text-cyber-secondary font-mono text-2xl font-bold">92.0%</div>
+              <span className="text-on-surface-variant/70 text-label-caps text-[10px]">平均目标接近度</span>
+              <div className="text-cyber-secondary font-mono text-2xl font-bold">{avgConfidenceText}</div>
             </div>
             <div>
-              <span className="text-on-surface-variant/70 text-label-caps text-[10px]">活动缓冲区</span>
-              <div className="text-on-surface font-mono text-2xl font-bold">12 条</div>
+              <span className="text-on-surface-variant/70 text-label-caps text-[10px]">当前告警工单</span>
+              <div className="text-on-surface font-mono text-2xl font-bold">{totalAlertCount} 条</div>
             </div>
           </div>
           <div className="hidden lg:block text-right font-sans text-xs text-on-surface-variant/80">

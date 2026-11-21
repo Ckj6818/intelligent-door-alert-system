@@ -197,12 +197,8 @@ export default function Header({
               onClick={() => setProfileOpen(!profileOpen)}
               className="flex items-center gap-2 pl-2 border-l border-outline-variant/20 cursor-pointer hover:opacity-80 select-none"
             >
-              <div className="w-8 h-8 rounded-full border border-cyber-primary/30 overflow-hidden relative">
-                <img 
-                  className="w-full h-full object-cover" 
-                  alt="Analyst Glow Avatar" 
-                  src="https://lh3.googleusercontent.com/aida-public/AB6AXuC4a-o3GB8Ac3i5N6wOfFHfYPrvmHqEXcNFqVqfsIXi45VSBgeX7g1UYY3NIWsLHrGAbjDguuQv4CngwbN8ae4u0JOQPymr_CWnSlJ8YuYPGuUaRsS8kN1cyO0DpLtYzxLLfGpFW0FFIG1uysNuY33rSAKXX_MFgAx0pkkQvcL5SM-uHxbVPF7T9naZm6r8iDvBOHMKJ4dfNNWA0Maz6vEoMDPIjij-TRWFAGR7IltdbLAdSMYgK-x2"
-                />
+              <div className="w-8 h-8 rounded-full border border-cyber-primary/40 bg-cyber-primary/15 flex items-center justify-center text-[11px] font-mono font-bold text-cyber-primary">
+                {username ? username.slice(0, 2).toUpperCase() : 'AD'}
               </div>
               <span className="font-mono text-xs text-on-surface hidden md:inline">{username || 'Admin_01'}</span>
               <ChevronDown className="w-3.5 h-3.5 text-on-surface-variant hidden md:inline" />
