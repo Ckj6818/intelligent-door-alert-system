@@ -3,23 +3,26 @@ package com.dooralert.controller;
 import cn.dev33.satoken.annotation.SaCheckPermission;
 import cn.dev33.satoken.annotation.SaCheckRole;
 import cn.dev33.satoken.annotation.SaMode;
+import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.AlertLogDTO;
 import com.dooralert.dto.AlertUploadDTO;
 import com.dooralert.service.AlertLogService;
+import com.dooralert.service.SysUserService;
 import com.dooralert.util.PublicBaseUrlResolver;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
+import com.dooralert.vo.SysUserVO;
 import com.dooralert.ws.AlertWebSocketServer;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 告警日志管理接口
@@ -30,6 +33,9 @@ public class AlertLogController {
 
     @Autowired
     private AlertLogService alertLogService;
+
+    @Autowired
+    private SysUserService sysUserService;
 
     @Autowired
     private PublicBaseUrlResolver publicBaseUrlResolver;
@@ -68,9 +74,10 @@ public class AlertLogController {
     }
 
     /**
-     * 新增告警
+     * 新增告警（仅 ADMIN 可执行）
      */
     @PostMapping
+    @SaCheckRole("ADMIN")
     public Result<Boolean> add(@RequestBody AlertLogDTO dto) {
         return Result.success(alertLogService.addAlert(dto));
     }
@@ -79,6 +86,7 @@ public class AlertLogController {
      * 修改告警（如变更处理状态）
      */
     @PutMapping("/{id:\\d+}")
+    @SaCheckRole(value = {"ADMIN", "OPERATOR"}, mode = SaMode.OR)
     public Result<Boolean> update(@PathVariable Long id, @RequestBody AlertLogDTO dto) {
         return alertLogService.updateAlert(id, dto)
                 ? Result.success(true)
@@ -133,15 +141,57 @@ public class AlertLogController {
     }
 
     /**
-     * 处理告警：ADMIN / OPERATOR 均可执行（安保核心职责）
+     * 读取回收站定时自动清理策略（保留小时数，0=不自动清理）
+     */
+    @GetMapping("/recycle-bin/policy")
+    @SaCheckRole("ADMIN")
+    public Result<Map<String, Integer>> getRecyclePolicy() {
+        return Result.success(Map.of("retentionHours", alertLogService.getRecycleRetentionHours()));
+    }
+
+    /**
+     * 更新回收站定时自动清理策略（仅 ADMIN）
+     */
+    @PutMapping("/recycle-bin/policy")
+    @SaCheckRole("ADMIN")
+    public Result<Map<String, Integer>> updateRecyclePolicy(@RequestBody Map<String, Integer> body) {
+        int hours = body != null && body.get("retentionHours") != null ? body.get("retentionHours") : 168;
+        int updated = alertLogService.updateRecycleRetentionHours(hours);
+        return Result.success("回收站自动清理策略已更新", Map.of("retentionHours", updated));
+    }
+
+    /**
+     * 处理告警或退回待复核：ADMIN / OPERATOR 均可执行（支持传入 status=0|1 与 handleRemark 处置结论）
      */
     @PutMapping("/{id:\\d+}/handle")
     @SaCheckRole(value = {"ADMIN", "OPERATOR"}, mode = SaMode.OR)
     @SaCheckPermission("alert:handle")
-    public Result<Boolean> handle(@PathVariable Long id) {
-        return alertLogService.handleAlert(id)
-                ? Result.success("告警已处理", true)
-                : Result.error("告警记录不存在或处理失败");
+    public Result<AlertLogVO> handle(
+            @PathVariable Long id,
+            @RequestBody(required = false) AlertLogDTO body) {
+        String operatorName = "admin";
+        try {
+            if (StpUtil.isLogin()) {
+                Long uid = StpUtil.getLoginIdAsLong();
+                SysUserVO user = sysUserService.getUserById(uid);
+                if (user != null && StringUtils.hasText(user.getUsername())) {
+                    operatorName = StringUtils.hasText(user.getNickname())
+                            ? user.getUsername() + " (" + user.getNickname() + ")"
+                            : user.getUsername();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        Integer targetStatus = body != null ? body.getStatus() : 1;
+        String remark = body != null ? body.getHandleRemark() : null;
+        AlertLogVO vo = alertLogService.handleAlertWithAudit(id, targetStatus, remark, operatorName);
+        if (vo == null) {
+            return Result.error("告警记录不存在或处置失败");
+        }
+        String msg = Integer.valueOf(0).equals(vo.getStatus())
+                ? "工单已退回待复核状态"
+                : "告警工单已完成处置归档";
+        return Result.success(msg, vo);
     }
 
     // ==========================================================

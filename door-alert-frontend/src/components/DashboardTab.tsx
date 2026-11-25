@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { DeviceStatus, LiveFeedItem, Alert } from '../types';
 import { addDevice, updateDevice, deleteDevice, getDeviceList, getPassageTodayStats, saveEdgeConfig } from '@/api/index';
+import { showCyberToast } from '../utils/cyberToast';
 
 /**
  * 边缘 YOLO MJPEG：默认同源代理 /video-stream（Vite/Nginx → :8090），
@@ -168,7 +169,7 @@ export default function DashboardTab({
 
   const handleSaveRoiPolygon = () => {
     if (roiPoints.length < 3) {
-      alert('请至少在画面上点击 3 个顶点以构成闭合多边形防区！');
+      showCyberToast('请至少在画面上点击 3 个顶点以构成闭合多边形防区！', 'warning');
       return;
     }
     setSavingRoi(true);
@@ -259,7 +260,7 @@ export default function DashboardTab({
       deleteDevice(id)
         .then(() => {
           setDevices(prev => prev.filter(d => d.id !== id));
-          alert(`设备「${name}」已成功删除。`);
+          showCyberToast(`设备「${name}」已成功删除`, 'info');
         })
         .catch(err => console.error('Delete device failed', err));
     }
@@ -272,21 +273,24 @@ export default function DashboardTab({
     if (deviceModalMode === 'add') {
       addDevice({ deviceName: formDeviceName.trim(), location: formLocation.trim() })
         .then(() => {
-          // Re-fetch device list
           getDeviceList({ current: 1, size: 50 }).then((res: any) => {
             const records = res.records || [];
-            const mappedDevices: DeviceStatus[] = records.map((d: any) => ({
-              id: String(d.id),
-              name: d.deviceName,
-              ip: d.ip || '192.168.1.' + (100 + d.id),
-              status: d.status === 1 ? 'online' : 'offline',
-              latency: d.status === 1 ? Math.floor(Math.random() * 15) + 5 : 0,
-              lastTimeout: d.status === 0 ? '04:22' : undefined
-            }));
+            const mappedDevices: DeviceStatus[] = records.map((d: any) => {
+              const elapsed =
+                d.lastHeartbeatElapsedSec != null ? Number(d.lastHeartbeatElapsedSec) : null;
+              return {
+                id: String(d.id),
+                name: d.deviceName,
+                ip: d.location || d.ip || '192.168.1.' + (100 + Number(d.id || 0)),
+                status: d.status === 1 ? 'online' : 'offline',
+                latency: d.status === 1 ? (elapsed != null ? Math.max(1, Math.min(30, elapsed)) : 1) : 0,
+                lastTimeout: d.status === 0 ? '未连接' : undefined,
+              };
+            });
             setDevices(mappedDevices);
           });
           setShowDeviceModal(false);
-          alert(`监控设备「${formDeviceName}」注册成功。`);
+          showCyberToast(`监控设备「${formDeviceName}」注册成功`, 'success');
         })
         .catch(err => console.error('Add device failed', err));
     } else {
@@ -294,12 +298,12 @@ export default function DashboardTab({
         .then(() => {
           setDevices(prev => prev.map(d => {
             if (d.id === editingDeviceId) {
-              return { ...d, name: formDeviceName.trim(), location: formLocation.trim() };
+              return { ...d, name: formDeviceName.trim(), ip: formLocation.trim() || d.ip };
             }
             return d;
           }));
           setShowDeviceModal(false);
-          alert('设备配置已成功更新。');
+          showCyberToast('设备配置已成功更新', 'success');
         })
         .catch(err => console.error('Update device failed', err));
     }

@@ -82,13 +82,16 @@ def bench_yolo(model, frames, half: bool, label: str):
         pass
 
     # warmup
+    kw = {"verbose": False}
+    if half:
+        kw["half"] = True
     for frame in frames[: min(5, len(frames))]:
-        model.predict(frame, verbose=False, half=half)
+        model.predict(frame, **kw)
 
     times = []
     for frame in frames:
         t0 = time.perf_counter()
-        model.predict(frame, verbose=False, half=half)
+        model.predict(frame, **kw)
         try:
             import torch
 
@@ -133,14 +136,17 @@ def bench_yolo_face(model, frames, half: bool, yunet_path: str, sface_path: str)
     except Exception:
         pass
 
+    kw_face = {"verbose": False, "classes": [0]}
+    if half:
+        kw_face["half"] = True
     for frame in frames[: min(3, len(frames))]:
-        model.predict(frame, verbose=False, half=half)
+        model.predict(frame, **kw_face)
 
     times = []
     face_hits = 0
     for frame in frames:
         t0 = time.perf_counter()
-        results = model.predict(frame, verbose=False, half=half, classes=[0])
+        results = model.predict(frame, **kw_face)
         for result in results:
             boxes = result.boxes
             if boxes is None:

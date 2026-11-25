@@ -33,7 +33,7 @@ public class AlertLog {
     @TableField("auth_status")
     private String authStatus;
 
-    /** 告警子类型: INTRUSION / TAILGATING / LOITERING */
+    /** 告警子类型: INTRUSION / TAILGATING / LOITERING / SPOOFING */
     @TableField("alert_type")
     private String alertType;
 
@@ -44,6 +44,18 @@ public class AlertLog {
     /** 处理状态: 0-未处理(待处理工单), 1-已处理 */
     @TableField("status")
     private Integer status;
+
+    /** 处置人账号/姓名 */
+    @TableField("handler")
+    private String handler;
+
+    /** 处置完成时间 */
+    @TableField("handle_time")
+    private LocalDateTime handleTime;
+
+    /** 处置结论/复核备注 */
+    @TableField("handle_remark")
+    private String handleRemark;
 
     @TableField(value = "create_time", fill = FieldFill.INSERT)
     private LocalDateTime createTime;

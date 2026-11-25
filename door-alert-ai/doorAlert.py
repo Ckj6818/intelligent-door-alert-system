@@ -264,18 +264,19 @@ PROX_W_D = float(os.environ.get("PROX_W_D", "0.25"))
 # 默认几乎全图；例如 "0.15,0.35,0.85,1.0" 表示画面下方门前区域
 _ROI_RAW = os.environ.get("ALERT_ROI_NORM", "0.0,0.25,1.0,1.0").strip()
 USE_BYTETRACK = os.environ.get("USE_BYTETRACK", "1").strip() in ("1", "true", "yes")
-# 人脸质量：最小边长(px)、Laplacian 清晰度下限、姿态对称度上限（越小越正脸）、眼距/脸宽下限
+# 人脸质量：最小边长(px)、YuNet置信度下限、Laplacian 清晰度下限、姿态对称度上限（越小越正脸）、眼距/脸宽下限
 FACE_MIN_SIDE = int(os.environ.get("FACE_MIN_SIDE", "48"))
+FACE_MIN_SCORE = float(os.environ.get("FACE_MIN_SCORE", "0.78"))
 FACE_MIN_SHARPNESS = float(os.environ.get("FACE_MIN_SHARPNESS", "35.0"))
-FACE_MAX_YAW_ASYM = float(os.environ.get("FACE_MAX_YAW_ASYM", "0.20"))
-FACE_MIN_EYE_SPAN_RATIO = float(os.environ.get("FACE_MIN_EYE_SPAN_RATIO", "0.32"))
+FACE_MAX_YAW_ASYM = float(os.environ.get("FACE_MAX_YAW_ASYM", "0.22"))
+FACE_MIN_EYE_SPAN_RATIO = float(os.environ.get("FACE_MIN_EYE_SPAN_RATIO", "0.30"))
 # track 投票窗口长度；授权锁定后保持身份
 TRACK_VOTE_WINDOW = int(os.environ.get("TRACK_VOTE_WINDOW", "6"))
 TRACK_LOCK_AUTH = os.environ.get("TRACK_LOCK_AUTH", "1").strip() in ("1", "true", "yes")
 # 人脸比对最小间隔（秒）
 FACE_CHECK_INTERVAL = float(os.environ.get("FACE_CHECK_INTERVAL", "0.12"))
-# 识别结果缓存时长（秒）：命中后复用
-FACE_CACHE_TTL = float(os.environ.get("FACE_CACHE_TTL", "5.0"))
+# 识别结果缓存时长（秒）：缩短至 2.0s 防止遮挡换脸或举手机后沿用历史授权
+FACE_CACHE_TTL = float(os.environ.get("FACE_CACHE_TTL", "2.0"))
 # 人脸 ROI 最长边：与底库同路径编码；240 在准度与速度间折中
 FACE_ROI_MAX_SIDE = int(os.environ.get("FACE_ROI_MAX_SIDE", "240"))
 # 空间缓存容差（像素）
@@ -292,15 +293,15 @@ SFACE_MODEL_PATH = os.environ.get(
     "SFACE_MODEL_PATH",
     os.path.join("models", "face_recognition_sface_2021dec.onnx"),
 )
-# SFace 余弦相似度：>= 授权；<= 明确陌生人；中间为「识别中」不告警
+# SFace 余弦相似度：>= 授权；<= 明确陌生人；中间为「识别中」不告警（放宽缓冲带抑制喝水/局部遮挡误报）
 SFACE_COSINE_THRESHOLD = float(os.environ.get("SFACE_COSINE_THRESHOLD", "0.363"))
-SFACE_REJECT_THRESHOLD = float(os.environ.get("SFACE_REJECT_THRESHOLD", "0.22"))
+SFACE_REJECT_THRESHOLD = float(os.environ.get("SFACE_REJECT_THRESHOLD", "0.18"))
 # 高置信授权可立刻通行（无需多帧）
 SFACE_STRONG_AUTH = float(os.environ.get("SFACE_STRONG_AUTH", "0.45"))
 # dlib：距离越小越像；超过 REJECT 才算明确陌生人
 FACE_REJECT_DISTANCE = float(os.environ.get("FACE_REJECT_DISTANCE", "0.70"))
-# 多帧确认：抑制走近时侧脸误报未授权
-UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "5"))
+# 多帧确认：抑制走近时侧脸或局部遮挡误报未授权
+UNAUTH_CONFIRM_FRAMES = int(os.environ.get("UNAUTH_CONFIRM_FRAMES", "6"))
 AUTH_CONFIRM_FRAMES = int(os.environ.get("AUTH_CONFIRM_FRAMES", "2"))
 
 # ================= 性能优化项 =================
@@ -385,6 +386,12 @@ DIST_WARNING_M = float(os.environ.get("DIST_WARNING_M", "3.0"))
 TRACK_HISTORY_LEN = 30
 LOITER_SECONDS = float(os.environ.get("LOITER_SECONDS", "5"))
 TAILGATE_ENABLE = os.environ.get("TAILGATE_ENABLE", "1").strip() in ("1", "true", "yes")
+ANTI_SPOOF_ENABLE = os.environ.get("ANTI_SPOOF_ENABLE", "1").strip() in ("1", "true", "yes")
+SPOOF_CONFIRM_FRAMES = int(os.environ.get("SPOOF_CONFIRM_FRAMES", "2"))
+# YOLOv8 COCO 电子屏与介质类：62=tv/显示器, 63=laptop/平板电脑, 67=cell phone/手机, 73=book/相册卡片
+SPOOF_MEDIA_CLASSES = (62, 63, 67, 73)
+SPOOF_MEDIA_CONF = float(os.environ.get("SPOOF_MEDIA_CONF", "0.20"))
+SPOOF_MEDIA_IMGSZ = int(os.environ.get("SPOOF_MEDIA_IMGSZ", "320"))
 TAILGATE_CLOSE_PX = float(os.environ.get("TAILGATE_CLOSE_PX", "180"))
 CLAHE_LUMINANCE = float(os.environ.get("CLAHE_LUMINANCE", "70"))
 _ROI_POLY_RAW = os.environ.get("ALERT_ROI_POLYGON", "").strip()
@@ -392,6 +399,7 @@ _ROI_POLY_RAW = os.environ.get("ALERT_ROI_POLYGON", "").strip()
 ALERT_TYPE_INTRUSION = "INTRUSION"
 ALERT_TYPE_TAILGATING = "TAILGATING"
 ALERT_TYPE_LOITERING = "LOITERING"
+ALERT_TYPE_SPOOFING = "SPOOFING"
 
 OFFLINE_CACHE_DIR = os.environ.get(
     "OFFLINE_CACHE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "offline_cache")
@@ -630,6 +638,34 @@ def _track_apply_vote(track_id, result):
             return None
         if result.get("face_found") and not result.get("quality_reject"):
             meta["quality_face"] = True
+        if result.get("spoof_suspected"):
+            meta["spoof_hits"] = meta.get("spoof_hits", 0) + 1
+            if meta.get("spoof_hits", 0) >= max(1, SPOOF_CONFIRM_FRAMES):
+                # 一旦确认介质伪造，立即解除可能存在的历史锁定并输出防伪拦截
+                meta["locked"] = False
+                meta["locked_status"] = None
+                return {
+                    "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                    "recognized_name": result.get("recognized_name") or "疑似照片/屏幕攻击",
+                    "face_distance": result.get("face_distance"),
+                    "face_similarity": result.get("face_similarity"),
+                    "face_found": True,
+                    "spoof_suspected": True,
+                    "spoof_reason": result.get("spoof_reason", ""),
+                    "alert_type": ALERT_TYPE_SPOOFING,
+                }
+            return {
+                "auth_status": None,
+                "recognized_name": result.get("recognized_name", ""),
+                "face_distance": result.get("face_distance"),
+                "face_similarity": result.get("face_similarity"),
+                "face_found": True,
+                "spoof_suspected": True,
+                "spoof_reason": result.get("spoof_reason", ""),
+                "alert_type": ALERT_TYPE_SPOOFING,
+            }
+        else:
+            meta["spoof_hits"] = 0
         if meta.get("locked") and TRACK_LOCK_AUTH:
             return {
                 "auth_status": meta.get("locked_status"),
@@ -1012,6 +1048,9 @@ def _update_raw_face_result(cx, cy, result, track_id=None, note=True):
         _raw_face["recognized_name"] = result.get("recognized_name", "")
         _raw_face["face_distance"] = result.get("face_distance")
         _raw_face["face_similarity"] = result.get("face_similarity")
+        _raw_face["spoof_suspected"] = bool(result.get("spoof_suspected"))
+        _raw_face["spoof_reason"] = result.get("spoof_reason", "")
+        _raw_face["alert_type"] = result.get("alert_type")
         _raw_face["face_found"] = True
     if track_id is not None:
         with _track_lock:
@@ -1022,6 +1061,9 @@ def _update_raw_face_result(cx, cy, result, track_id=None, note=True):
                     "recognized_name": result.get("recognized_name", ""),
                     "face_distance": result.get("face_distance"),
                     "face_similarity": result.get("face_similarity"),
+                    "spoof_suspected": bool(result.get("spoof_suspected")),
+                    "spoof_reason": result.get("spoof_reason", ""),
+                    "alert_type": result.get("alert_type"),
                     "ts": ts,
                 }
     if note:
@@ -1042,6 +1084,9 @@ def _track_raw_hit(track_id, now):
             "recognized_name": raw.get("recognized_name", ""),
             "face_distance": raw.get("face_distance"),
             "face_similarity": raw.get("face_similarity"),
+            "spoof_suspected": bool(raw.get("spoof_suspected")),
+            "spoof_reason": raw.get("spoof_reason", ""),
+            "alert_type": raw.get("alert_type"),
             "from_confirmed_cache": False,
         }
 
@@ -1062,8 +1107,30 @@ def _raw_face_hit(cx, cy, now):
             "recognized_name": _raw_face["recognized_name"],
             "face_distance": _raw_face["face_distance"],
             "face_similarity": _raw_face.get("face_similarity"),
+            "spoof_suspected": bool(_raw_face.get("spoof_suspected")),
+            "spoof_reason": _raw_face.get("spoof_reason", ""),
+            "alert_type": _raw_face.get("alert_type"),
             "from_confirmed_cache": False,
         }
+
+
+def _invalidate_auth_caches(track_id=None):
+    """防伪拦截触发时，立刻清除历史授权缓存与轨迹锁定，禁止手机照片沿用授权。"""
+    with _face_cache_lock:
+        _face_cache["auth_status"] = None
+        _face_cache["recognized_name"] = ""
+        _face_cache["ts"] = 0.0
+    if track_id is not None:
+        with _track_lock:
+            meta = _track_meta.get(track_id)
+            if meta is not None:
+                meta["locked"] = False
+                meta["locked_status"] = None
+                meta["locked_name"] = ""
+                meta["votes"] = []
+                st = meta.get("streak")
+                if isinstance(st, dict):
+                    st["auth_streak"] = 0
 
 
 def _apply_cache_to_detections(detections):
@@ -1072,6 +1139,8 @@ def _apply_cache_to_detections(detections):
         return
     now = time.time()
     for det in detections:
+        if det.get("spoof_suspected") or det.get("alert_type") == ALERT_TYPE_SPOOFING:
+            continue
         prox = det.get("proximity_ratio", det.get("area_ratio", 0))
         if prox < PROXIMITY_ALERT_THRESHOLD or not det.get("in_roi", True):
             continue
@@ -1101,10 +1170,14 @@ def _apply_cache_to_detections(detections):
         det["face_distance"] = cached["face_distance"]
         det["face_similarity"] = cached.get("face_similarity")
         det["from_confirmed_cache"] = from_confirmed
+        if cached.get("spoof_suspected"):
+            det["spoof_suspected"] = True
+            det["spoof_reason"] = cached.get("spoof_reason", "")
+            det["alert_type"] = ALERT_TYPE_SPOOFING
         if det["auth_status"] == AUTH_STATUS_AUTHORIZED:
             det["danger_level"] = 0
         elif det["auth_status"] == AUTH_STATUS_UNAUTHORIZED:
-            det["danger_level"] = 3 if prox >= 0.45 else 2
+            det["danger_level"] = 3 if (prox >= 0.45 or det.get("spoof_suspected")) else 2
 
 
 def _confirm_same_target(cx, cy):
@@ -1128,11 +1201,18 @@ def _apply_streak_sample(state, result, sample_ts):
     if result.get("quality_reject"):
         state["unauth_streak"] = 0
         return
+    if result.get("spoof_suspected"):
+        state["auth_streak"] = 0
+        state["spoof_streak"] = state.get("spoof_streak", 0) + 1
+        state["unauth_streak"] = state.get("unauth_streak", 0) + 1
+        return
+    state["spoof_streak"] = 0
     auth = result.get("auth_status")
     if auth == AUTH_STATUS_AUTHORIZED:
         sim = result.get("face_similarity")
         strong = (
-            FACE_ENGINE == "sface"
+            not ANTI_SPOOF_ENABLE
+            and FACE_ENGINE == "sface"
             and isinstance(sim, (int, float))
             and float(sim) >= SFACE_STRONG_AUTH
         )
@@ -1191,6 +1271,9 @@ def stabilize_auth_for_action(det):
     auth = det.get("auth_status")
     cx, cy = _bbox_center(det["x1"], det["y1"], det["x2"], det["y2"])
 
+    if det.get("spoof_suspected") or det.get("alert_type") == ALERT_TYPE_SPOOFING:
+        return det.get("auth_status")
+
     locked = _track_locked_identity(det.get("track_id"))
     if locked is not None:
         _apply_identity_to_det(det, locked)
@@ -1203,7 +1286,8 @@ def stabilize_auth_for_action(det):
     if auth == AUTH_STATUS_AUTHORIZED:
         sim = det.get("face_similarity")
         strong = (
-            FACE_ENGINE == "sface"
+            not ANTI_SPOOF_ENABLE
+            and FACE_ENGINE == "sface"
             and isinstance(sim, (int, float))
             and float(sim) >= SFACE_STRONG_AUTH
         )
@@ -1227,51 +1311,67 @@ def stabilize_auth_for_action(det):
 
     if auth == AUTH_STATUS_UNAUTHORIZED:
         _, unauth_streak = _get_streaks(det.get("track_id"))
-        if unauth_streak >= UNAUTH_CONFIRM_FRAMES:
-            _update_face_cache(
-                cx,
-                cy,
-                {
-                    "face_found": True,
-                    "auth_status": AUTH_STATUS_UNAUTHORIZED,
-                    "recognized_name": det.get(
-                        "recognized_name", UNAUTHORIZED_DISPLAY_NAME
-                    ),
-                    "face_distance": det.get("face_distance"),
-                    "face_similarity": det.get("face_similarity"),
-                },
-                allow_unauth=True,
-            )
+        req_frames = SPOOF_CONFIRM_FRAMES if det.get("spoof_suspected") else UNAUTH_CONFIRM_FRAMES
+        if unauth_streak >= max(1, req_frames):
+            if not det.get("spoof_suspected"):
+                _update_face_cache(
+                    cx,
+                    cy,
+                    {
+                        "face_found": True,
+                        "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                        "recognized_name": det.get(
+                            "recognized_name", UNAUTHORIZED_DISPLAY_NAME
+                        ),
+                        "face_distance": det.get("face_distance"),
+                        "face_similarity": det.get("face_similarity"),
+                    },
+                    allow_unauth=True,
+                )
             return AUTH_STATUS_UNAUTHORIZED
         det["auth_status"] = None
-        det["recognized_name"] = ""
+        if not det.get("spoof_suspected"):
+            det["recognized_name"] = ""
         return None
 
     return None
 
 
-def _crop_face_roi(frame_bgr, x1, y1, x2, y2):
+def _face_roi_bounds(frame_h, frame_w, x1, y1, x2, y2):
     """
-    取人体框上半部分（头肩）并等比缩放到 FACE_ROI_MAX_SIDE 内。
-    比整框做人脸更准、更快。
+    计算用于人脸检测的裁剪区域 (x1f, y1f, x2f, y2f)。
+    - 远距全身站立框（高宽比 > 1.85 且未贴画面底边）：取上 65% 头肩区，排除腿部干扰。
+    - 近景桌面摄像头 / 半身或贴底边人形框：保留 100% 框高与框宽，防止嘴部和下巴被腰斩！
     """
-    h, w = frame_bgr.shape[:2]
     x1c, y1c = max(0, int(x1)), max(0, int(y1))
-    x2c, y2c = min(w, int(x2)), min(h, int(y2))
+    x2c, y2c = min(frame_w, int(x2)), min(frame_h, int(y2))
     box_h = y2c - y1c
     box_w = x2c - x1c
     if box_h < 40 or box_w < 30:
         return None
-
-    # 上 60%：覆盖头肩，避免下巴被裁掉导致特征漂移
-    y2_face = y1c + max(int(box_h * 0.60), 36)
-    y2_face = min(y2_face, y2c)
-    pad_x = int(box_w * 0.16)
-    x1f, x2f = x1c + pad_x, x2c - pad_x
-    if x2f - x1f < 24:
+    is_full_standing = (box_h > 1.85 * box_w) and (y2c < frame_h - 20)
+    if is_full_standing:
+        y2_face = min(y2c, y1c + max(int(box_h * 0.65), 48))
+        pad_x = int(box_w * 0.10)
+        x1f, x2f = x1c + pad_x, x2c - pad_x
+        if x2f - x1f < 28:
+            x1f, x2f = x1c, x2c
+    else:
         x1f, x2f = x1c, x2c
+        y2_face = y2c
+    return (x1f, y1c, x2f, y2_face)
 
-    roi = frame_bgr[y1c:y2_face, x1f:x2f]
+
+def _crop_face_roi(frame_bgr, x1, y1, x2, y2):
+    """
+    自适应提取头肩/近景人脸 ROI 并等比缩放到 FACE_ROI_MAX_SIDE 内。
+    """
+    h, w = frame_bgr.shape[:2]
+    bounds = _face_roi_bounds(h, w, x1, y1, x2, y2)
+    if bounds is None:
+        return None
+    x1f, y1f, x2f, y2f = bounds
+    roi = frame_bgr[y1f:y2f, x1f:x2f]
     if roi is None or roi.size == 0:
         return None
     roi = _enhance_face_roi(roi)
@@ -1342,6 +1442,411 @@ def _get_sface_recognizer():
     return recognizer
 
 
+def _yunet_all_faces(bgr_img, min_score=0.70):
+    """返回图像中所有置信度达标的 YuNet 人脸行列表。"""
+    if bgr_img is None or bgr_img.size == 0:
+        return []
+    h, w = bgr_img.shape[:2]
+    if h < 24 or w < 24:
+        return []
+    detector = _get_yunet_detector(w, h)
+    if detector is None:
+        return []
+    try:
+        _, faces = detector.detect(bgr_img)
+    except Exception:
+        return []
+    if faces is None or len(faces) == 0:
+        return []
+    return [f for f in faces if float(f[-1]) >= float(min_score)]
+
+
+def _detect_screen_quad_around_face(frame_bgr, fx, fy, fw, fh):
+    """
+    正交四边梯度边框检测（手机亮屏黑边 / 证件相纸边缘）：
+      - 使用 HoughLinesP 提取人脸上下左右四条近似正交的物理边界线段（兼容手指持握遮挡部分边框）
+      - 校验方向梯度一致性（上下边 |Gy| 主导，左右边 |Gx| 主导）与线段角点收敛性（排除贯穿画面的床架/衣柜背景长线）
+      - 嘴边酸奶盒/水杯等局部物体仅位于鼻翼下方，不可能在人脸上方和两侧同时形成闭合包络边框，实现零误报
+    """
+    H, W = frame_bgr.shape[:2]
+    pad_x = max(20.0, fw * 1.35)
+    pad_y = max(24.0, fh * 1.65)
+    px1 = max(0, int(fx - pad_x))
+    py1 = max(0, int(fy - pad_y))
+    px2 = min(W, int(fx + fw + pad_x))
+    py2 = min(H, int(fy + fh + pad_y))
+    pw, ph = px2 - px1, py2 - py1
+    if pw < 56 or ph < 56:
+        return False
+
+    patch = frame_bgr[py1:py2, px1:px2]
+    scale = 260.0 / float(max(pw, ph)) if max(pw, ph) > 260 else 1.0
+    if scale < 1.0:
+        patch = cv2.resize(
+            patch,
+            (max(1, int(pw * scale)), max(1, int(ph * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    sh, sw = patch.shape[:2]
+    rfx = (fx - px1) * scale
+    rfy = (fy - py1) * scale
+    rfw = max(10.0, fw * scale)
+    rfh = max(10.0, fh * scale)
+    fcx = rfx + 0.5 * rfw
+    fcy = rfy + 0.5 * rfh
+    face_area = rfw * rfh
+
+    try:
+        gray = cv2.GaussianBlur(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY), (3, 3), 0)
+        gx = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+        gy = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+        edges = cv2.Canny(gray, 42, 125)
+        lines = cv2.HoughLinesP(
+            edges,
+            1,
+            np.pi / 180.0,
+            threshold=24,
+            minLineLength=max(18, int(0.55 * min(rfw, rfh))),
+            maxLineGap=9,
+        )
+    except Exception:
+        return False
+
+    if lines is None or lines.size == 0:
+        return False
+
+    v_left, v_right, h_top, h_bot = [], [], [], []
+    for ln in np.asarray(lines).reshape(-1, 4):
+        lx1, ly1, lx2, ly2 = map(float, ln)
+        dx, dy = lx2 - lx1, ly2 - ly1
+        ang = math.degrees(math.atan2(dy, dx))
+        length = math.hypot(dx, dy)
+        mx, my = 0.5 * (lx1 + lx2), 0.5 * (ly1 + ly2)
+        if abs(abs(ang) - 90.0) <= 16.0:
+            y_lo, y_hi = min(ly1, ly2), max(ly1, ly2)
+            norm_ang = ang if ang > 0 else ang + 180.0
+            if mx < rfx + 0.05 * rfw and y_lo < fcy < y_hi + 0.30 * rfh:
+                v_left.append((mx, y_lo, y_hi, length, norm_ang))
+            elif mx > rfx + 0.95 * rfw and y_lo < fcy < y_hi + 0.30 * rfh:
+                v_right.append((mx, y_lo, y_hi, length, norm_ang))
+        elif abs(ang) <= 16.0 or abs(abs(ang) - 180.0) <= 16.0:
+            x_lo, x_hi = min(lx1, lx2), max(lx1, lx2)
+            if my < rfy + 0.05 * rfh and x_lo < fcx < x_hi + 0.30 * rfw:
+                h_top.append((my, x_lo, x_hi, length))
+            elif my > rfy + 0.95 * rfh and x_lo < fcx < x_hi + 0.30 * rfw:
+                # 下边框必须真实位于画面内部，不能是摄像头视野底边裁切线
+                if py1 + my / max(1e-4, scale) < H - 10:
+                    h_bot.append((my, x_lo, x_hi, length))
+
+    if not (v_left and v_right and h_top):
+        return False
+
+    # 方向梯度判据掩码（1px 邻域膨胀抗锯齿）
+    vert_edge = ((gx > 28.0) & (gx > 1.65 * gy)).astype(np.uint8)
+    horz_edge = ((gy > 28.0) & (gy > 1.65 * gx)).astype(np.uint8)
+    vert_edge = cv2.dilate(vert_edge, np.ones((3, 3), np.uint8), iterations=1)
+    horz_edge = cv2.dilate(horz_edge, np.ones((3, 3), np.uint8), iterations=1)
+
+    for lx, ly1, ly2, _llen, lang in v_left:
+        for rx, ry1, ry2, _rlen, rang in v_right:
+            if abs(lang - rang) > 10.0:
+                continue
+            qw = rx - lx
+            if qw < 1.06 * rfw or qw > 2.55 * rfw:
+                continue
+            for ty, tx1, tx2, _tlen in h_top:
+                # 排除贯穿整个房间背景的床沿/窗框长横杆（线段远超手机左右角点）
+                if tx1 < lx - 0.24 * qw or tx2 > rx + 0.24 * qw:
+                    continue
+                if (min(rx, tx2) - max(lx, tx1)) < 0.45 * qw:
+                    continue
+                xs = np.clip(
+                    np.linspace(lx + 0.12 * qw, rx - 0.12 * qw, 20).astype(int),
+                    0, sw - 1,
+                )
+                s_top = float(np.mean(horz_edge[int(np.clip(ty, 0, sh - 1)), xs] > 0))
+                # A) 三边 Π 型手机亮屏检测：当手机底边超出摄像头下沿时，校验「顶部黑色边框 -> 高亮背光屏」剧烈亮度跃变 + 左右平行垂直边框
+                ty_i = int(np.clip(ty, 0, sh - 1))
+                if s_top >= 0.65 and ty_i >= 5 and ty_i + 10 < sh:
+                    lx_i = int(np.clip(lx + 0.14 * qw, 0, sw - 2))
+                    rx_i = int(np.clip(rx - 0.14 * qw, lx_i + 1, sw - 1))
+                    bezel_strip = gray[max(0, ty_i - 16):max(1, ty_i - 3), lx_i:rx_i]
+                    screen_strip = gray[min(sh - 1, ty_i + 3):min(sh, ty_i + 15), lx_i:rx_i]
+                    if bezel_strip.size > 0 and screen_strip.size > 0:
+                        bezel_mean = float(bezel_strip.mean())
+                        screen_mean = float(screen_strip.mean())
+                        if bezel_mean < 68.0 and screen_mean > 165.0 and (screen_mean - bezel_mean) >= 90.0:
+                            y_end = min(float(sh - 2), rfy + rfh)
+                            if y_end > ty + 0.90 * rfh:
+                                ys_u = np.clip(
+                                    np.linspace(ty + 0.10 * (y_end - ty), y_end, 20).astype(int),
+                                    0, sh - 1,
+                                )
+                                su_l = float(np.mean(vert_edge[ys_u, int(np.clip(lx, 0, sw - 1))] > 0))
+                                su_r = float(np.mean(vert_edge[ys_u, int(np.clip(rx, 0, sw - 1))] > 0))
+                                if min(su_l, su_r) >= 0.60:
+                                    return True
+                # B) 完整四边闭合矩形检测（相纸 / 证件照 / 完整入镜的手机屏幕）
+                for by, bx1, bx2, _blen in h_bot:
+                    if bx1 < lx - 0.24 * qw or bx2 > rx + 0.24 * qw:
+                        continue
+                    if (min(rx, bx2) - max(lx, bx1)) < 0.45 * qw:
+                        continue
+                    qh = by - ty
+                    if qh < 1.10 * rfh or qh > 3.15 * rfh:
+                        continue
+                    if ly1 < ty - 0.24 * qh or ly2 > by + 0.24 * qh:
+                        continue
+                    if ry1 < ty - 0.24 * qh or ry2 > by + 0.24 * qh:
+                        continue
+                    area_ratio = (qw * qh) / max(1.0, face_area)
+                    if area_ratio < 1.20 or area_ratio > 6.50:
+                        continue
+                    aspect = min(qw, qh) / max(qw, qh)
+                    if aspect < 0.42 or aspect > 0.86:
+                        continue
+                    ys = np.clip(
+                        np.linspace(ty + 0.12 * qh, by - 0.12 * qh, 20).astype(int),
+                        0, sh - 1,
+                    )
+                    s_bot = float(np.mean(horz_edge[int(np.clip(by, 0, sh - 1)), xs] > 0))
+                    s_lft = float(np.mean(vert_edge[ys, int(np.clip(lx, 0, sw - 1))] > 0))
+                    s_rgt = float(np.mean(vert_edge[ys, int(np.clip(rx, 0, sw - 1))] > 0))
+                    if min(s_top, s_bot, s_lft, s_rgt) >= 0.60 and (
+                        (s_top + s_bot + s_lft + s_rgt) * 0.25 >= 0.74
+                    ):
+                        return True
+    return False
+
+
+def _detect_media_spoofs(
+    model,
+    frame_bgr,
+    infer_frame,
+    scale,
+    yolo_device,
+    use_half,
+    detections,
+    known_encodings,
+    known_names,
+    media_streak,
+):
+    """
+    基于 YOLOv8n COCO 实体检测的手机/平板/屏幕/相册防伪引擎（零误报优先）：
+      - 检测画面中的 cell phone(67) / tv(62) / laptop(63) / book(73)
+      - 仅当 YuNet 在该电子屏/相册框内部真实检出人脸（score >= 0.70, min_side >= 24px）时，
+        才判定为「屏幕/照片翻拍攻击」，因此手持手机看消息、桌面放笔记本、喝酸奶均 0% 误报！
+      - 一旦命中：立刻解除关联轨迹锁定与历史授权缓存，第 1 帧即阻断放行，连续确认后触发 SPOOFING 告警。
+    返回: (updated_media_streak: int)
+    """
+    if not ANTI_SPOOF_ENABLE or model is None or frame_bgr is None:
+        return 0
+    h, w = frame_bgr.shape[:2]
+    inv = (1.0 / scale) if scale > 0 else 1.0
+    try:
+        pred_kwargs = dict(
+            conf=SPOOF_MEDIA_CONF,
+            imgsz=SPOOF_MEDIA_IMGSZ,
+            classes=list(SPOOF_MEDIA_CLASSES),
+            device=yolo_device,
+            verbose=False,
+        )
+        if use_half:
+            pred_kwargs["half"] = True
+        media_results = model.predict(infer_frame, **pred_kwargs)
+    except Exception:
+        return 0
+
+    cls_cn_map = {67: "手机屏幕", 62: "电子屏幕", 63: "平板/电脑屏幕", 73: "相册/纸质照片"}
+    media_hits = []
+    for mres in media_results:
+        mboxes = mres.boxes
+        if mboxes is None:
+            continue
+        for mb in mboxes:
+            mx1, my1, mx2, my2 = map(float, mb.xyxy[0])
+            if scale != 1.0:
+                mx1, my1, mx2, my2 = mx1 * inv, my1 * inv, mx2 * inv, my2 * inv
+            mx1, my1 = max(0, int(mx1)), max(0, int(my1))
+            mx2, my2 = min(w, int(mx2)), min(h, int(my2))
+            mw, mh = mx2 - mx1, my2 - my1
+            if mw < 45 or mh < 55:
+                continue
+            mcls = int(mb.cls[0])
+            mconf = float(mb.conf[0])
+            # 略微外扩 4% 后用 YuNet 核实：电子屏/手机框内部是否真的显示着一张人脸！
+            pad_x, pad_y = int(0.04 * mw), int(0.04 * mh)
+            cx1, cy1 = max(0, mx1 - pad_x), max(0, my1 - pad_y)
+            cx2, cy2 = min(w, mx2 + pad_x), min(h, my2 + pad_y)
+            crop = frame_bgr[cy1:cy2, cx1:cx2]
+            if crop is None or crop.size == 0:
+                continue
+            face_in_media = _yunet_best_face_row(crop)
+            has_face = (
+                face_in_media is not None
+                and float(face_in_media[-1]) >= 0.65
+                and min(float(face_in_media[2]), float(face_in_media[3])) >= 22.0
+            )
+            # 兜底：若手机屏因强光过曝/抖动导致 YuNet 瞬时漏检，校验该 cell phone/tv 框是否包裹了人像框，或为正对镜头的近距高亮手机屏
+            media_area_ratio = float(mw * mh) / max(1.0, float(h * w))
+            has_person_inside = False
+            for d in detections:
+                ix1, iy1 = max(mx1, d["x1"]), max(my1, d["y1"])
+                ix2, iy2 = min(mx2, d["x2"]), min(my2, d["y2"])
+                inter_d = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+                d_area = max(1, (d["x2"] - d["x1"]) * (d["y2"] - d["y1"]))
+                if (inter_d / float(d_area)) >= 0.45:
+                    has_person_inside = True
+                    break
+            bright_screen = False
+            if mcls == 67 and mconf >= 0.40 and media_area_ratio >= 0.14:
+                try:
+                    c_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    bright_screen = float(np.mean(c_gray > 220)) >= 0.10
+                except Exception:
+                    bright_screen = False
+            if not (has_face or (mcls in (67, 62) and mconf >= 0.35 and has_person_inside) or bright_screen):
+                continue
+            # 尝试提取被冒用者姓名，方便工单直接展示「照片冒用(陈柯杰)」
+            matched_who = ""
+            if has_face and known_encodings is not None and len(known_encodings) > 0:
+                s_feat = _sface_feature_from_bgr(crop, require_quality=False)
+                if s_feat is not None:
+                    mres_id = _match_encoding(s_feat, known_encodings, known_names)
+                    if mres_id.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+                        matched_who = mres_id.get("recognized_name", "")
+            media_name = cls_cn_map.get(mcls, "电子屏幕")
+            reason = f"检出{media_name}翻拍人脸"
+            label = f"照片冒用({matched_who})" if matched_who else f"{media_name}照片攻击"
+            media_hits.append((mx1, my1, mx2, my2, mconf, reason, label))
+
+    if not media_hits:
+        return 0
+
+    new_streak = media_streak + 1
+    confirmed = new_streak >= max(1, SPOOF_CONFIRM_FRAMES)
+    _invalidate_auth_caches(None)
+
+    for mx1, my1, mx2, my2, mconf, reason, label in media_hits:
+        matched_det = None
+        for d in detections:
+            ix1 = max(mx1, d["x1"])
+            iy1 = max(my1, d["y1"])
+            ix2 = min(mx2, d["x2"])
+            iy2 = min(my2, d["y2"])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            d_area = max(1, (d["x2"] - d["x1"]) * (d["y2"] - d["y1"]))
+            if (inter / float(d_area)) >= 0.45:
+                matched_det = d
+                _invalidate_auth_caches(d.get("track_id"))
+                d["auth_status"] = AUTH_STATUS_UNAUTHORIZED if confirmed else None
+                d["recognized_name"] = label
+                d["danger_level"] = 3 if confirmed else 0
+                d["alert_type"] = ALERT_TYPE_SPOOFING
+                d["spoof_suspected"] = True
+                d["spoof_reason"] = reason
+                d["from_confirmed_cache"] = confirmed
+        if matched_det is None:
+            detections.append({
+                "x1": mx1,
+                "y1": my1,
+                "x2": mx2,
+                "y2": my2,
+                "confidence": round(max(0.55, mconf), 2),
+                "area_ratio": float((mx2 - mx1) * (my2 - my1)) / max(1.0, float(h * w)),
+                "proximity_ratio": 0.72,
+                "d_factor": 0.2,
+                "d_factor_h": 0.2,
+                "d_est": 0.55,
+                "distance_band": "DANGER",
+                "y_norm": float(my2) / max(1.0, float(h)),
+                "in_roi": True,
+                "track_id": None,
+                "dwell_sec": 0.0,
+                "motion": "Approaching",
+                "auth_status": AUTH_STATUS_UNAUTHORIZED if confirmed else None,
+                "recognized_name": label,
+                "face_distance": None,
+                "danger_level": 3 if confirmed else 0,
+                "alert_type": ALERT_TYPE_SPOOFING,
+                "spoof_suspected": True,
+                "spoof_reason": reason,
+                "from_confirmed_cache": confirmed,
+            })
+        if confirmed:
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] "
+                f"[防伪拦截·实体检出] {reason} (conf={mconf:.2f}) | 目标={label}"
+            )
+    return new_streak
+
+
+def _project_face_to_frame(face_row, roi_shape, roi_bounds):
+    """将 ROI 内的 YuNet 人脸框与关键点精确映射回原图坐标系。"""
+    x1f, y1f, x2f, y2f = roi_bounds
+    raw_rw = max(1, x2f - x1f)
+    raw_rh = max(1, y2f - y1f)
+    rh, rw = roi_shape[:2]
+    inv_sx = float(raw_rw) / max(1.0, float(rw))
+    inv_sy = float(raw_rh) / max(1.0, float(rh))
+    fx, fy, fw, fh = map(float, face_row[:4])
+    pts_orig = []
+    for k in range(5):
+        px = x1f + float(face_row[4 + 2 * k]) * inv_sx
+        py = y1f + float(face_row[5 + 2 * k]) * inv_sy
+        pts_orig.append((px, py))
+    return (
+        x1f + fx * inv_sx,
+        y1f + fy * inv_sy,
+        fw * inv_sx,
+        fh * inv_sy,
+        pts_orig,
+    )
+
+
+def _assess_anti_spoof(frame_bgr, x1, y1, x2, y2, roi, best_face_row):
+    """
+    高置信物理防伪校验（零误报优先，兼容桌面近景摄像头与嘴部喝水/进食遮挡）：
+      1) 单人体头肩纵向同框双脸（真脸在上 + 胸前/颌下举手机照片脸）
+      2) 人脸四周同时检出正交闭合且方向梯度一致的手机屏幕 / 证件照物理边框
+    注：已移除纯宽高比（w_ratio/h_ratio/rel_cy）硬阈值，避免桌面近景半身或低头时误判为大头照。
+    返回: (is_spoof: bool, reason: str)
+    """
+    if not ANTI_SPOOF_ENABLE or best_face_row is None or frame_bgr is None:
+        return False, ""
+    H, W = frame_bgr.shape[:2]
+    bounds = _face_roi_bounds(H, W, x1, y1, x2, y2)
+    if bounds is None:
+        return False, ""
+
+    # 1) 单人纵向双脸校验（持手机置于胸前/下颌旁，排除两人并排同框）
+    all_faces = _yunet_all_faces(roi, min_score=0.80)
+    valid_faces = [f for f in all_faces if min(float(f[2]), float(f[3])) >= 28.0]
+    if len(valid_faces) >= 2:
+        fx0, fy0, fw0, fh0 = map(float, best_face_row[:4])
+        c0x, c0y = fx0 + 0.5 * fw0, fy0 + 0.5 * fh0
+        for other in valid_faces:
+            ox, oy, ow, oh = map(float, other[:4])
+            ocx, ocy = ox + 0.5 * ow, oy + 0.5 * oh
+            dist = math.hypot(c0x - ocx, c0y - ocy)
+            if (
+                dist > 0.75 * max(fw0, ow)
+                and abs(c0y - ocy) > 0.55 * max(fh0, oh)
+                and abs(c0x - ocx) < 1.30 * max(fw0, ow)
+            ):
+                return True, "手持照片·双脸同框"
+
+    fx_orig, fy_orig, fw_orig, fh_orig, _ = _project_face_to_frame(
+        best_face_row, roi.shape, bounds
+    )
+
+    # 2) 手机屏幕 / 相纸正交四边框线检测
+    if _detect_screen_quad_around_face(frame_bgr, fx_orig, fy_orig, fw_orig, fh_orig):
+        return True, "检出手机屏幕/相纸边框"
+
+    return False, ""
+
+
 def _yunet_best_face_row(bgr_roi):
     """YuNet 最高置信度人脸行（含关键点，供 SFace alignCrop）。"""
     h, w = bgr_roi.shape[:2]
@@ -1359,25 +1864,78 @@ def _yunet_best_face_row(bgr_roi):
     return max(faces, key=lambda f: float(f[-1]))
 
 
-def _assess_face_quality(bgr_roi, face_row):
+def _assess_face_quality(bgr_roi, face_row, *, frame_shape=None, roi_bounds=None):
     """
-    YuNet 5 点姿态对称度 + 最小尺寸 + Laplacian 清晰度。
-    返回 (ok, reason)；不通过时调用方保持「识别中」，不累加未授权。
-    face_row: x,y,w,h, re,le,nose,rcm,lcm, score
+    完整人脸与姿态/清晰度门控（不通过时保持「识别中」，绝不累加陌生人或误报告警）：
+      1) YuNet 置信度 >= FACE_MIN_SCORE（拦截半张脸/重度遮挡低分框）
+      2) 五官完整度校验：双眼、鼻尖、左右嘴角必须全部位于画面与 ROI 有效内部，且下巴未被画面底边截断
+      3) 纵向解剖比例（眼->鼻->嘴垂直间距）与水平姿态对称度校验
+      4) Laplacian 清晰度下限
+    face_row: x,y,w,h, re_x,re_y, le_x,le_y, nt_x,nt_y, rcm_x,rcm_y, lcm_x,lcm_y, score
     """
     if face_row is None or bgr_roi is None or bgr_roi.size == 0:
         return False, "noface"
     x, y, fw, fh = map(float, face_row[:4])
+    score = float(face_row[-1]) if len(face_row) >= 15 else 1.0
+    if score < FACE_MIN_SCORE:
+        return False, "incomplete"
     if min(fw, fh) < float(FACE_MIN_SIDE):
         return False, "small"
+    # 半张脸被底边或顶边压扁时 fh/fw 明显偏小
+    if (fh / max(1.0, fw)) < 1.04:
+        return False, "incomplete"
     try:
         re_x, re_y = float(face_row[4]), float(face_row[5])
         le_x, le_y = float(face_row[6]), float(face_row[7])
         nt_x, nt_y = float(face_row[8]), float(face_row[9])
-        rcm_x = float(face_row[10])
-        lcm_x = float(face_row[12])
+        rcm_x, rcm_y = float(face_row[10]), float(face_row[11])
+        lcm_x, lcm_y = float(face_row[12]), float(face_row[13])
     except (IndexError, TypeError, ValueError):
         return False, "landmarks"
+
+    h, w = bgr_roi.shape[:2]
+    # ROI 内部五官边界完整度（防止半张脸贴边）
+    edge_mx = max(4.0, 0.05 * fw)
+    if (
+        min(re_x, le_x, nt_x, rcm_x, lcm_x) < edge_mx
+        or max(re_x, le_x, nt_x, rcm_x, lcm_x) > (w - edge_mx)
+    ):
+        return False, "incomplete"
+    if min(re_y, le_y) < max(5.0, 0.07 * fh):
+        return False, "incomplete"
+    max_mouth_y = max(rcm_y, lcm_y)
+    if (h - max_mouth_y) < max(7.0, 0.08 * fh):
+        return False, "incomplete"
+
+    # 原图视野边界完整度（防止摄像头边缘裁掉嘴/下巴/额头/半边脸时误触发上报）
+    if frame_shape is not None and roi_bounds is not None:
+        fh_all, fw_all = frame_shape[:2]
+        fx_o, fy_o, fw_o, fh_o, pts_o = _project_face_to_frame(
+            face_row, bgr_roi.shape, roi_bounds
+        )
+        (rex_o, rey_o), (lex_o, ley_o), (_ntx_o, _nty_o), (rcmx_o, rcmy_o), (lcmx_o, lcmy_o) = pts_o
+        if (
+            fx_o < 4.0
+            or fy_o < 4.0
+            or (fx_o + fw_o) > (fw_all - 4.0)
+            or (fy_o + fh_o) > (fh_all + 0.12 * fh_o)
+        ):
+            return False, "incomplete"
+        if min(rex_o, lex_o, rcmx_o, lcmx_o) < 10.0 or max(rex_o, lex_o, rcmx_o, lcmx_o) > (fw_all - 10.0):
+            return False, "incomplete"
+        if min(rey_o, ley_o) < max(12.0, 0.09 * fh_o):
+            return False, "incomplete"
+        if (fh_all - max(rcmy_o, lcmy_o)) < max(16.0, 0.10 * fh_o):
+            return False, "incomplete"
+
+    # 纵向解剖比例（眼 -> 鼻 -> 嘴 必须依次展开且比例正常）
+    mid_eye_y = 0.5 * (re_y + le_y)
+    mid_mouth_y = 0.5 * (rcm_y + lcm_y)
+    eye_to_nose = (nt_y - mid_eye_y) / (fh + 1e-5)
+    nose_to_mouth = (mid_mouth_y - nt_y) / (fh + 1e-5)
+    if not (0.09 <= eye_to_nose <= 0.38 and 0.08 <= nose_to_mouth <= 0.38):
+        return False, "incomplete"
+
     eye_span = abs(le_x - re_x) + 1e-5
     if (eye_span / (fw + 1e-5)) < FACE_MIN_EYE_SPAN_RATIO:
         return False, "pose"
@@ -1391,10 +1949,10 @@ def _assess_face_quality(bgr_roi, face_row):
     mouth_asym = abs(nt_x - mid_mouth_x) / mouth_span
     # 双眼高度差也反映侧脸/倾斜
     eye_roll = abs(le_y - re_y) / (fh + 1e-5)
-    asym = max(yaw_asym, 0.6 * mouth_asym, eye_roll)
+    asym = max(yaw_asym, 0.55 * mouth_asym, eye_roll)
     if asym > FACE_MAX_YAW_ASYM:
         return False, "pose"
-    h, w = bgr_roi.shape[:2]
+
     x1, y1 = max(0, int(x)), max(0, int(y))
     x2, y2 = min(w, int(x + fw)), min(h, int(y + fh))
     if x2 - x1 < 12 or y2 - y1 < 12:
@@ -1430,10 +1988,10 @@ def _yunet_face_locations(bgr_roi):
     return [(top, right, bottom, left)]
 
 
-def _sface_feature_from_bgr(bgr_roi, *, require_quality=False):
+def _sface_feature_from_bgr(bgr_roi, *, require_quality=False, frame_shape=None, roi_bounds=None):
     """
     YuNet 定位 + SFace 对齐提特征。
-    require_quality=True 时侧脸/模糊返回 (None, quality_reject_dict)。
+    require_quality=True 时残缺脸/侧脸/模糊返回 (None, quality_reject_dict)。
     底库加载时 require_quality=False，仅返回特征向量或 None。
     """
     recognizer = _get_sface_recognizer()
@@ -1443,7 +2001,9 @@ def _sface_feature_from_bgr(bgr_roi, *, require_quality=False):
     if face_row is None:
         return (None, None) if require_quality else None
     if require_quality:
-        ok, reason = _assess_face_quality(bgr_roi, face_row)
+        ok, reason = _assess_face_quality(
+            bgr_roi, face_row, frame_shape=frame_shape, roi_bounds=roi_bounds
+        )
         if not ok:
             return None, {
                 "auth_status": None,
@@ -1630,8 +2190,10 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
     if known_encodings is None or len(known_encodings) == 0:
         return unauthorized
 
+    fh_all, fw_all = frame_bgr.shape[:2]
+    roi_bounds = _face_roi_bounds(fh_all, fw_all, x1, y1, x2, y2)
     roi = _crop_face_roi(frame_bgr, x1, y1, x2, y2)
-    if roi is None:
+    if roi is None or roi_bounds is None:
         return pending
 
     try:
@@ -1639,10 +2201,49 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
         method = FACE_ENGINE if FACE_ENGINE != "none" else "yunet"
         encoding = None
 
-        # 1) SFace 主路径（含姿态/清晰度过滤）
+        # 0) 优先执行物理防伪校验（手机屏幕内的人脸在缩放 ROI 中可能小于 48px，需在尺寸过滤前拦截）
+        best_face_row = _yunet_best_face_row(roi)
+        if best_face_row is not None and float(best_face_row[-1]) >= 0.76:
+            is_spoof_early, spoof_reason_early = _assess_anti_spoof(
+                frame_bgr, x1, y1, x2, y2, roi, best_face_row
+            )
+            if is_spoof_early:
+                spoof_enc = _sface_feature_from_bgr(roi, require_quality=False)
+                spoof_match = (
+                    _match_encoding(spoof_enc, known_encodings, known_names)
+                    if spoof_enc is not None
+                    else {}
+                )
+                matched_who = spoof_match.get("recognized_name", "")
+                if spoof_match.get("auth_status") == AUTH_STATUS_AUTHORIZED and matched_who:
+                    spoof_label = f"照片冒用({matched_who})"
+                else:
+                    spoof_label = f"疑似照片/屏幕({spoof_reason_early})"
+                ms = (time.perf_counter() - t0) * 1000
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"[防伪拦截] {ms:.0f}ms | {spoof_reason_early} | 目标={spoof_label}"
+                )
+                return {
+                    "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                    "recognized_name": spoof_label,
+                    "face_distance": spoof_match.get("face_distance"),
+                    "face_similarity": spoof_match.get("face_similarity"),
+                    "face_found": True,
+                    "spoof_suspected": True,
+                    "spoof_reason": spoof_reason_early,
+                    "alert_type": ALERT_TYPE_SPOOFING,
+                }
+
+        # 1) SFace 主路径（含完整度/姿态/清晰度过滤）
         if FACE_ENGINE == "sface" or _get_sface_recognizer() is not None:
             method = "sface"
-            encoding, qrej = _sface_feature_from_bgr(roi, require_quality=True)
+            encoding, qrej = _sface_feature_from_bgr(
+                roi,
+                require_quality=True,
+                frame_shape=frame_bgr.shape,
+                roi_bounds=roi_bounds,
+            )
             if qrej is not None:
                 ms = (time.perf_counter() - t0) * 1000
                 print(
@@ -1651,11 +2252,16 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
                 )
                 return qrej
 
-        # 2) dlib 回退（同样做 YuNet 质量过滤）
+        # 2) dlib 回退（同样做 YuNet 完整度与质量过滤）
         if encoding is None and FACE_ENGINE != "sface":
             face_row = _yunet_best_face_row(roi)
             if face_row is not None:
-                ok, reason = _assess_face_quality(roi, face_row)
+                ok, reason = _assess_face_quality(
+                    roi,
+                    face_row,
+                    frame_shape=frame_bgr.shape,
+                    roi_bounds=roi_bounds,
+                )
                 if not ok:
                     ms = (time.perf_counter() - t0) * 1000
                     print(
@@ -1736,6 +2342,30 @@ def recognize_face_in_roi(frame_bgr, x1, y1, x2, y2, known_encodings, known_name
             return pending
 
         result = _match_encoding(encoding, known_encodings, known_names)
+        is_spoof, spoof_reason = _assess_anti_spoof(
+            frame_bgr, x1, y1, x2, y2, roi, best_face_row
+        )
+        if is_spoof:
+            matched_who = result.get("recognized_name", "")
+            if result.get("auth_status") == AUTH_STATUS_AUTHORIZED and matched_who:
+                spoof_label = f"照片冒用({matched_who})"
+            else:
+                spoof_label = f"疑似照片/屏幕({spoof_reason})"
+            ms = (time.perf_counter() - t0) * 1000
+            print(
+                f"[{datetime.now().strftime('%H:%M:%S')}] "
+                f"[防伪拦截] {ms:.0f}ms | {spoof_reason} | 目标={spoof_label}"
+            )
+            return {
+                "auth_status": AUTH_STATUS_UNAUTHORIZED,
+                "recognized_name": spoof_label,
+                "face_distance": result.get("face_distance"),
+                "face_similarity": result.get("face_similarity"),
+                "face_found": True,
+                "spoof_suspected": True,
+                "spoof_reason": spoof_reason,
+                "alert_type": ALERT_TYPE_SPOOFING,
+            }
         ms = (time.perf_counter() - t0) * 1000
         sim = result.get("face_similarity")
         if result.get("auth_status") == AUTH_STATUS_AUTHORIZED:
@@ -1770,6 +2400,10 @@ def _apply_identity_to_det(det, identity):
         identity.get("from_confirmed_cache") or identity.get("from_track_lock")
     )
     det["quality_reject"] = bool(identity.get("quality_reject"))
+    if identity.get("spoof_suspected"):
+        det["spoof_suspected"] = True
+        det["spoof_reason"] = identity.get("spoof_reason", "")
+        det["alert_type"] = ALERT_TYPE_SPOOFING
 
 
 def _run_face_job(frame_bgr, x1, y1, x2, y2, known_encodings, known_names,
@@ -2005,7 +2639,7 @@ _desired_video_source = os.environ.get("VIDEO_SOURCE", "").strip() or os.environ
 
 def apply_edge_config(cfg):
     """心跳或 /apply-config 下发的算法/防区/视频源参数，写入内存后下一帧生效。"""
-    global COOL_DOWN_INTERVAL, SFACE_COSINE_THRESHOLD, DIST_DANGER_M, TAILGATE_ENABLE
+    global COOL_DOWN_INTERVAL, SFACE_COSINE_THRESHOLD, DIST_DANGER_M, TAILGATE_ENABLE, ANTI_SPOOF_ENABLE
     global CONF_THRESHOLD, LOITER_SECONDS, ALERT_ROI_POLYGON, _desired_video_source
     if not isinstance(cfg, dict):
         return
@@ -2030,6 +2664,11 @@ def apply_edge_config(cfg):
         if val != TAILGATE_ENABLE:
             TAILGATE_ENABLE = val
             changed.append(f"tailgate={'on' if TAILGATE_ENABLE else 'off'}")
+    if "antiSpoofEnabled" in cfg and cfg.get("antiSpoofEnabled") is not None:
+        val = bool(cfg.get("antiSpoofEnabled"))
+        if val != ANTI_SPOOF_ENABLE:
+            ANTI_SPOOF_ENABLE = val
+            changed.append(f"antiSpoof={'on' if ANTI_SPOOF_ENABLE else 'off'}")
     if cfg.get("yoloConfThreshold") is not None:
         val = max(0.15, min(0.95, float(cfg["yoloConfThreshold"])))
         if abs(val - CONF_THRESHOLD) > 1e-3:
@@ -2079,22 +2718,47 @@ def _boxes_close(a, b, limit_px=None):
     return math.hypot(acx - bcx, acy - bcy) <= limit
 
 
-def evaluate_scene_alerts(detections):
-    """尾随与遮挡徘徊。返回 [(det, alert_type), ...]。"""
+def _box_iou(a, b):
+    ix1 = max(float(a["x1"]), float(b["x1"]))
+    iy1 = max(float(a["y1"]), float(b["y1"]))
+    ix2 = min(float(a["x2"]), float(b["x2"]))
+    iy2 = min(float(a["y2"]), float(b["y2"]))
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(1.0, float(a["x2"] - a["x1"]) * float(a["y2"] - a["y1"]))
+    area_b = max(1.0, float(b["x2"] - b["x1"]) * float(b["y2"] - b["y1"]))
+    return inter / max(1.0, area_a + area_b - inter)
+
+
+def evaluate_scene_alerts(detections, frame_h=480):
+    """尾随与遮挡徘徊（严格排除防伪框与残缺贴底半头框，防止串扰误报）。返回 [(det, alert_type), ...]。"""
     extras = []
     zone = [
         d for d in detections
-        if d.get("in_roi") and d.get("proximity_ratio", 0) >= PROXIMITY_ALERT_THRESHOLD
+        if d.get("in_roi")
+        and d.get("proximity_ratio", 0) >= PROXIMITY_ALERT_THRESHOLD
+        and not d.get("spoof_suspected")
+        and d.get("alert_type") != ALERT_TYPE_SPOOFING
     ]
     if TAILGATE_ENABLE and len(zone) >= 2:
         auths = [d for d in zone if d.get("auth_status") == AUTH_STATUS_AUTHORIZED]
-        unauths = [d for d in zone if d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED]
+        unauths = [
+            d for d in zone
+            if d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED
+            and all(_box_iou(a, d) < 0.30 for a in auths)
+        ]
         if auths and unauths:
             target = unauths[0]
             target["alert_type"] = ALERT_TYPE_TAILGATING
             extras.append((target, ALERT_TYPE_TAILGATING))
         elif len(auths) == 1:
-            others = [d for d in zone if d is not auths[0]]
+            others = [
+                d for d in zone
+                if d is not auths[0]
+                and _box_iou(auths[0], d) < 0.25
+                and d.get("dwell_sec", 0.0) >= 2.0
+            ]
             if others and _boxes_close(auths[0], others[0]):
                 target = others[0]
                 target["alert_type"] = ALERT_TYPE_TAILGATING
@@ -2103,6 +2767,10 @@ def evaluate_scene_alerts(detections):
         if det.get("motion") == "Passing":
             continue
         if det.get("auth_status") == AUTH_STATUS_AUTHORIZED:
+            continue
+        # 若仅露出摄像头底边的半个头顶（脸部根本不在视野内），不计为恶意遮挡徘徊
+        box_h = float(det["y2"] - det["y1"])
+        if det["y2"] >= frame_h - 12 and box_h < 0.42 * float(max(1, frame_h)):
             continue
         if det.get("dwell_sec", 0) >= LOITER_SECONDS and not _track_quality_face(det.get("track_id")):
             det["alert_type"] = ALERT_TYPE_LOITERING
@@ -2284,6 +2952,7 @@ def start_mjpeg_server():
                 telem["video_source"] = str(_desired_video_source)
                 telem["yolo_conf"] = float(CONF_THRESHOLD)
                 telem["loiter_sec"] = float(LOITER_SECONDS)
+                telem["anti_spoof"] = bool(ANTI_SPOOF_ENABLE)
                 body = json.dumps(
                     {"ok": True, "stream": "/video", "telemetry": telem},
                     ensure_ascii=False,
@@ -2682,8 +3351,9 @@ def audible_beep():
 # =====================================================================
 
 def render_alert_capture(frame, x1, y1, x2, y2, confidence,
-                         auth_status=AUTH_STATUS_UNAUTHORIZED, recognized_name=""):
-    """生成带告警框的上传用渲染图。授权绿框，未授权红框。"""
+                         auth_status=AUTH_STATUS_UNAUTHORIZED, recognized_name="",
+                         alert_type=ALERT_TYPE_INTRUSION):
+    """生成带告警框的上传用渲染图。授权绿框，防伪拦截琥珀框，未授权红框。"""
     annotated = frame.copy()
     is_auth = auth_status == AUTH_STATUS_AUTHORIZED
     top_y = (y1 - 8) if y1 >= 38 else (y1 + 32)
@@ -2695,6 +3365,19 @@ def render_alert_capture(frame, x1, y1, x2, y2, confidence,
         put_cn_text(
             annotated, label, (x1 + 4, top_y), (100, 255, 140),
             font_size=22, bg_color=(16, 20, 26),
+        )
+    elif alert_type == ALERT_TYPE_SPOOFING:
+        color = (0, 140, 255)
+        tag = recognized_name or "疑似照片/屏幕伪造"
+        label = f"防伪拦截：{tag} ({confidence:.2f})"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 3)
+        put_cn_text(
+            annotated, label, (x1 + 4, top_y), (80, 205, 255),
+            font_size=22, bg_color=(16, 20, 26),
+        )
+        put_cn_text(
+            annotated, "警告：疑似照片/屏幕防伪拦截！", (24, 52), (60, 190, 255),
+            font_size=26, bg_color=(16, 20, 26),
         )
     else:
         color = (0, 0, 245)
@@ -2758,12 +3441,18 @@ def draw_status_hud(frame):
 def draw_live_detection(frame, x1, y1, x2, y2, confidence, in_cooldown,
                         auth_status=None, recognized_name="", area_ratio=0.0,
                         proximity_ratio=None, track_id=None, dwell_sec=0.0,
-                        in_roi=True, d_est=None, distance_band_name=None, motion=None):
-    """实时预览绘制：授权绿框，未授权红框，识别中黄框，远处/区外灰框。"""
+                        in_roi=True, d_est=None, distance_band_name=None, motion=None,
+                        spoof_suspected=False, spoof_reason=""):
+    """实时预览绘制：防伪拦截琥珀橙框，授权绿框，未授权红框，识别中青黄框，远处/区外灰框。"""
     h, _w = frame.shape[:2]
     prox = float(proximity_ratio if proximity_ratio is not None else area_ratio)
     tid_txt = f"#{track_id} " if track_id is not None else ""
-    if auth_status == AUTH_STATUS_AUTHORIZED:
+    if spoof_suspected:
+        color = (0, 140, 255)
+        text_color = (80, 200, 255)
+        tag_name = recognized_name or spoof_reason or "疑似照片/屏幕介质"
+        label = f"{tid_txt}防伪拦截：{tag_name}"
+    elif auth_status == AUTH_STATUS_AUTHORIZED:
         color = (0, 210, 70)
         text_color = (90, 255, 130)
         label = f"{tid_txt}{recognized_name} ({confidence:.2f})"
@@ -3111,6 +3800,9 @@ def dispatch_detection_action(frame_clean, det, alert_type=ALERT_TYPE_INTRUSION)
     if alert_type == ALERT_TYPE_TAILGATING and not auth_status:
         auth_status = AUTH_STATUS_UNAUTHORIZED
         det["recognized_name"] = det.get("recognized_name") or "尾随人员"
+    if alert_type == ALERT_TYPE_SPOOFING and not auth_status:
+        auth_status = AUTH_STATUS_UNAUTHORIZED
+        det["recognized_name"] = det.get("recognized_name") or "疑似照片/屏幕攻击"
 
     audible_beep()
     title_name = det.get("recognized_name", UNAUTHORIZED_DISPLAY_NAME)
@@ -3118,12 +3810,15 @@ def dispatch_detection_action(frame_clean, det, alert_type=ALERT_TYPE_INTRUSION)
         title_name = title_name or "尾随闯入"
     elif alert_type == ALERT_TYPE_LOITERING:
         title_name = title_name or "遮挡徘徊"
+    elif alert_type == ALERT_TYPE_SPOOFING:
+        title_name = title_name or "疑似照片/屏幕攻击"
     capture_frame = render_alert_capture(
         frame_clean,
         det["x1"], det["y1"], det["x2"], det["y2"],
         det["confidence"],
         auth_status=auth_status or AUTH_STATUS_UNAUTHORIZED,
         recognized_name=title_name,
+        alert_type=alert_type,
     )
     danger = det.get("danger_level") or (3 if alert_type != ALERT_TYPE_INTRUSION else 2)
     _upload_executor.submit(
@@ -3273,6 +3968,8 @@ def main():
 
     def yolo_inference_thread():
         nonlocal latest_frame, running, active_detections, last_inference_time
+        standalone_spoof_streak = 0
+        media_spoof_streak = 0
 
         print("[INFO] YOLO 推理后台线程已启动。")
         while running:
@@ -3366,6 +4063,88 @@ def main():
                         track_id=tid,
                     )
                     new_detections.append(det)
+
+                # 1) YOLOv8n 手机/电子屏/相册实体防伪拦截（穿透 track 锁定与缓存，手机照片 0ms 延迟阻断放行）
+                if ANTI_SPOOF_ENABLE:
+                    media_spoof_streak = _detect_media_spoofs(
+                        model,
+                        frame_to_process,
+                        infer_frame,
+                        scale,
+                        yolo_device,
+                        use_half,
+                        new_detections,
+                        known_encodings,
+                        known_names,
+                        media_spoof_streak,
+                    )
+
+                # 2) 贴镜纯手机/证件照防伪兜底：仅当画面中上区域悬浮完整人脸、无任何 YOLO 人体框覆盖、且检出屏幕边框时才触发，绝不误伤底边半张脸
+                if ANTI_SPOOF_ENABLE and media_spoof_streak == 0:
+                    standalone_hit = False
+                    standalone_faces = _yunet_all_faces(infer_frame, min_score=0.82)
+                    for sf in standalone_faces:
+                        sfx, sfy, sfw, sfh = map(float, sf[:4])
+                        if scale != 1.0:
+                            sfx, sfy, sfw, sfh = sfx * inv, sfy * inv, sfw * inv, sfh * inv
+                        if min(sfw, sfh) < 48.0:
+                            continue
+                        # 贴近画面底边/四边的人脸属于真人在视野边缘（躯干在镜头外），绝不可当作无躯干照片！
+                        if (
+                            sfx < 14.0
+                            or sfy < 14.0
+                            or (sfx + sfw) > (w - 14.0)
+                            or (sfy + sfh) >= 0.78 * float(h)
+                        ):
+                            continue
+                        sfcx = sfx + 0.5 * sfw
+                        sfcy = sfy + 0.5 * sfh
+                        # 只要落在任意 YOLO person 框内或附近，即已有真实躯干关联，禁止重复套框
+                        covered_by_body = any(
+                            (d["x1"] - 0.20 * sfw) <= sfcx <= (d["x2"] + 0.20 * sfw)
+                            and (d["y1"] - 0.20 * sfh) <= sfcy <= (d["y2"] + 0.10 * sfh)
+                            for d in new_detections
+                        )
+                        if covered_by_body:
+                            continue
+                        if not _detect_screen_quad_around_face(frame_to_process, sfx, sfy, sfw, sfh):
+                            continue
+                        standalone_hit = True
+                        standalone_spoof_streak += 1
+                        bx1 = max(0, int(sfx - 0.16 * sfw))
+                        by1 = max(0, int(sfy - 0.16 * sfh))
+                        bx2 = min(w, int(sfx + 1.16 * sfw))
+                        by2 = min(h, int(sfy + 1.20 * sfh))
+                        confirmed_spoof = standalone_spoof_streak >= max(1, SPOOF_CONFIRM_FRAMES)
+                        new_detections.append({
+                            "x1": bx1,
+                            "y1": by1,
+                            "x2": bx2,
+                            "y2": by2,
+                            "confidence": round(float(sf[-1]), 2),
+                            "area_ratio": float((bx2 - bx1) * (by2 - by1)) / max(1.0, float(h * w)),
+                            "proximity_ratio": 0.68,
+                            "d_factor": 0.2,
+                            "d_factor_h": 0.2,
+                            "d_est": 0.55,
+                            "distance_band": "DANGER",
+                            "y_norm": float(by2) / max(1.0, float(h)),
+                            "in_roi": True,
+                            "track_id": None,
+                            "dwell_sec": 0.0,
+                            "motion": "Approaching",
+                            "auth_status": AUTH_STATUS_UNAUTHORIZED if confirmed_spoof else None,
+                            "recognized_name": "屏幕/照片介质伪造",
+                            "face_distance": None,
+                            "danger_level": 3 if confirmed_spoof else 0,
+                            "alert_type": ALERT_TYPE_SPOOFING,
+                            "spoof_suspected": confirmed_spoof,
+                            "spoof_reason": "检出无躯干手机屏幕/相纸边框",
+                            "from_confirmed_cache": confirmed_spoof,
+                        })
+                        break
+                    if not standalone_hit:
+                        standalone_spoof_streak = 0
 
                 with _telemetry_lock:
                     prev_yolo = _telemetry.get("yolo_ms", 0.0)
@@ -3624,21 +4403,35 @@ def main():
                 d_est=det.get("d_est"),
                 distance_band_name=det.get("distance_band"),
                 motion=det.get("motion"),
+                spoof_suspected=bool(det.get("spoof_suspected")),
+                spoof_reason=det.get("spoof_reason", ""),
             )
 
-        if primary_det is not None and primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
+        if any(d.get("spoof_suspected") for d in current_detections):
+            put_cn_text(
+                frame, "警告：疑似照片/屏幕介质防伪拦截！", (16, 62), (60, 185, 255),
+                font_size=24, bg_color=(16, 20, 26), bg_alpha=0.80,
+            )
+        elif primary_det is not None and primary_det.get("auth_status") == AUTH_STATUS_UNAUTHORIZED:
             put_cn_text(
                 frame, "警告：未授权人员！", (16, 62), (90, 90, 255),
                 font_size=26, bg_color=(16, 20, 26), bg_alpha=0.75,
             )
 
-        if primary_det is not None:
+        any_spoof_active = any(d.get("spoof_suspected") for d in current_detections)
+        spoof_dets = [
+            d for d in current_detections
+            if d.get("spoof_suspected") and d.get("auth_status") == AUTH_STATUS_UNAUTHORIZED
+        ]
+        if spoof_dets:
+            dispatch_detection_action(frame_clean, spoof_dets[0], alert_type=ALERT_TYPE_SPOOFING)
+        elif not any_spoof_active and primary_det is not None:
             stable_auth = primary_det.get("auth_status")
             if stable_auth in (AUTH_STATUS_AUTHORIZED, AUTH_STATUS_UNAUTHORIZED):
                 if not in_cooldown or stable_auth == AUTH_STATUS_AUTHORIZED:
                     dispatch_detection_action(frame_clean, primary_det)
 
-        for scene_det, scene_type in evaluate_scene_alerts(current_detections):
+        for scene_det, scene_type in evaluate_scene_alerts(current_detections, frame_h=frame.shape[0]):
             dispatch_detection_action(frame_clean, scene_det, alert_type=scene_type)
             if scene_type == ALERT_TYPE_TAILGATING:
                 put_cn_text(

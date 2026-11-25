@@ -265,4 +265,37 @@ class AlertLogServiceTest {
         List<AlertLogVO> recycleBin = alertLogService.listRecycleBin();
         assertTrue(recycleBin.isEmpty(), "清空后回收站应为空");
     }
+
+    @Test
+    @Order(8)
+    @DisplayName("工单处置闭环与状态回退 — 应记录处置人/备注并支持退回待复核及 SPOOFING 类型")
+    void handleAlertWithAudit_andSpoofingType_shouldWork() {
+        AlertUploadDTO dto = new AlertUploadDTO();
+        dto.setDeviceId(testDeviceId);
+        dto.setProximityRatio(0.66);
+        dto.setDangerLevel(3);
+        dto.setAuthStatus("UNAUTHORIZED");
+        dto.setAlertType("SPOOFING");
+        dto.setRecognizedName("照片冒用(陈柯杰)");
+
+        AlertWsPayload uploaded = alertLogService.uploadAlert(dto, null);
+        assertEquals("SPOOFING", uploaded.getAlertType());
+
+        AlertLogVO handled = alertLogService.handleAlertWithAudit(
+                uploaded.getAlertId(), 1, "照片防伪演练测试已归档", "admin (系统管理员)"
+        );
+        assertNotNull(handled);
+        assertEquals(1, handled.getStatus());
+        assertEquals("admin (系统管理员)", handled.getHandler());
+        assertEquals("照片防伪演练测试已归档", handled.getHandleRemark());
+        assertNotNull(handled.getHandleTime());
+
+        AlertLogVO reopened = alertLogService.handleAlertWithAudit(
+                uploaded.getAlertId(), 0, "发起二次人工复核", "admin (系统管理员)"
+        );
+        assertNotNull(reopened);
+        assertEquals(0, reopened.getStatus(), "重新核实后状态应回退为 0");
+        assertNull(reopened.getHandleTime(), "退回待复核后处置完成时间应清空");
+        assertEquals("发起二次人工复核", reopened.getHandleRemark());
+    }
 }

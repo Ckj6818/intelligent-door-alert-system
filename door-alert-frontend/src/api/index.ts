@@ -79,12 +79,39 @@ export function updateDevice(id: string | number, data: any): Promise<any> {
 }
 
 /**
- * Handle alert
+ * Handle or reopen alert with optional audit remark
  */
-export function handleAlert(id: string | number): Promise<any> {
+export function handleAlert(
+  id: string | number,
+  data?: { status?: number; handleRemark?: string },
+): Promise<any> {
   return request({
     url: `/alerts/${id}/handle`,
     method: 'put',
+    data: data || { status: 1 },
+  });
+}
+
+export function getRecyclePolicy(): Promise<{ retentionHours: number }> {
+  return request({
+    url: '/alerts/recycle-bin/policy',
+    method: 'get',
+  });
+}
+
+export function updateRecyclePolicy(retentionHours: number): Promise<{ retentionHours: number }> {
+  return request({
+    url: '/alerts/recycle-bin/policy',
+    method: 'put',
+    data: { retentionHours },
+  });
+}
+
+export function changeUserPassword(data: { oldPassword: string; newPassword: string }): Promise<any> {
+  return request({
+    url: '/users/change-password',
+    method: 'put',
+    data,
   });
 }
 
@@ -266,6 +293,7 @@ export interface EdgeConfigPayload {
   cooldownSec?: number;
   faceMatchThreshold?: number;
   tailgateEnabled?: boolean;
+  antiSpoofEnabled?: boolean;
   yoloConfThreshold?: number;
   loiterSeconds?: number;
   videoSource?: string;

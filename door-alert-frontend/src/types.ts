@@ -22,12 +22,15 @@ export interface AlertPayload {
   timestamp?: string;
   createTime?: string;
   eventType?: 'ALERT' | 'PASSAGE' | string;
-  /** INTRUSION / TAILGATING / LOITERING */
+  /** INTRUSION / TAILGATING / LOITERING / SPOOFING */
   alertType?: string;
   deviceId?: number | string;
   deviceName?: string;
   status?: number;
   location?: string;
+  handler?: string;
+  handleTime?: string;
+  handleRemark?: string;
 }
 
 export interface Alert {
@@ -48,6 +51,9 @@ export interface Alert {
   areaRatio?: number;
   alertLevel?: number;
   alertType?: string;
+  handler?: string;
+  handleTime?: string;
+  handleRemark?: string;
 }
 
 /** 授权通行右上角通知 */
@@ -88,6 +94,9 @@ export interface TrashItem {
   alertType?: string;
   status?: Alert['status'];
   statusType?: Alert['statusType'];
+  handler?: string;
+  handleTime?: string;
+  handleRemark?: string;
 }
 
 export interface NodeReport {
@@ -102,6 +111,7 @@ export interface NodeReport {
 export interface SystemUser {
   id: string;
   username: string;
+  nickname?: string;
   role: 'Admin' | 'Operator' | string;
   status: 'Active' | 'Offline';
   initials: string;

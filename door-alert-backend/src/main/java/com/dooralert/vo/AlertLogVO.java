@@ -26,11 +26,20 @@ public class AlertLogVO {
     /** 识别到的姓名 */
     private String recognizedName;
 
-    /** INTRUSION / TAILGATING / LOITERING */
+    /** INTRUSION / TAILGATING / LOITERING / SPOOFING */
     private String alertType;
 
     /** 0-未处理(待处理工单), 1-已处理 */
     private Integer status;
+
+    /** 处置操作员 */
+    private String handler;
+
+    /** 处置时间 */
+    private LocalDateTime handleTime;
+
+    /** 处置结论备注 */
+    private String handleRemark;
 
     private LocalDateTime createTime;
 

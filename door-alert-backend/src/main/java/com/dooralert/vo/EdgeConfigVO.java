@@ -21,6 +21,9 @@ public class EdgeConfigVO {
     /** 是否启用尾随检测 */
     private Boolean tailgateEnabled = true;
 
+    /** 是否启用照片/屏幕介质静默防伪门控 */
+    private Boolean antiSpoofEnabled = true;
+
     /** YOLO 行人检测置信度阈值 (0.15 ~ 0.95) */
     private Double yoloConfThreshold = 0.45;
 

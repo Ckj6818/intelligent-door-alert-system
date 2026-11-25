@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Clock, Bell, ChevronDown, ShieldCheck, Key, Activity, Users } from 'lucide-react';
 import { Tab, Alert } from '../types';
+import { getDeviceList } from '@/api/index';
+import { showCyberToast } from '../utils/cyberToast';
+
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   username: string;
   alerts?: Alert[];
+  wsConnected?: boolean;
   setActiveTab?: (tab: Tab) => void;
   onOpenWhitelist?: () => void;
 }
@@ -15,6 +19,7 @@ export default function Header({
   setSearchQuery,
   username,
   alerts = [],
+  wsConnected = false,
   setActiveTab,
   onOpenWhitelist,
 }: HeaderProps) {
@@ -24,6 +29,54 @@ export default function Header({
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [showHealthModal, setShowHealthModal] = useState(false);
+  const [healthState, setHealthState] = useState<{
+    backendUp: boolean;
+    backendMs: number | null;
+    aiOnline: boolean;
+    aiFps: number;
+    aiDevice: string;
+  }>({
+    backendUp: true,
+    backendMs: null,
+    aiOnline: false,
+    aiFps: 0,
+    aiDevice: '',
+  });
+
+  useEffect(() => {
+    if (!showHealthModal) return;
+    const t0 = performance.now();
+    getDeviceList({ current: 1, size: 1 })
+      .then(() => {
+        setHealthState((prev) => ({
+          ...prev,
+          backendUp: true,
+          backendMs: Math.max(1, Math.round(performance.now() - t0)),
+        }));
+      })
+      .catch(() => {
+        setHealthState((prev) => ({ ...prev, backendUp: false, backendMs: null }));
+      });
+
+    fetch('/video-stream/health', { cache: 'no-store' })
+      .then(async (r) => {
+        if (!r.ok) {
+          setHealthState((prev) => ({ ...prev, aiOnline: false, aiFps: 0 }));
+          return;
+        }
+        const json = await r.json().catch(() => null);
+        const telem = json?.telemetry || {};
+        setHealthState((prev) => ({
+          ...prev,
+          aiOnline: true,
+          aiFps: Number(telem.fps) || 0,
+          aiDevice: String(telem.device || 'CPU'),
+        }));
+      })
+      .catch(() => {
+        setHealthState((prev) => ({ ...prev, aiOnline: false, aiFps: 0 }));
+      });
+  }, [showHealthModal]);
 
   const userRole = localStorage.getItem('user_role') || 'OPERATOR';
 
@@ -299,7 +352,7 @@ export default function Header({
                 <div className="pt-2 flex gap-3">
                   <button
                     onClick={() => {
-                      alert(`【凭证校验通过】用户 [${username}] 的 JWT Token 校验正常，角色权限 [${userRole}] 匹配通过！`);
+                      showCyberToast(`凭证校验通过：用户 [${username}] 的 Sa-Token JWT 生效中，角色 [${userRole}]`, 'success');
                     }}
                     className="flex-1 py-2 bg-cyber-primary-dim/20 border border-cyber-primary/40 text-cyber-primary rounded text-xs font-bold hover:bg-cyber-primary hover:text-cyber-bg transition-all cursor-pointer"
                   >
@@ -349,19 +402,31 @@ export default function Header({
               <div className="bg-cyber-surface-lowest p-4 rounded-lg border border-outline-variant/15 space-y-2.5 font-mono text-xs">
                 <div className="flex justify-between border-b border-outline-variant/10 pb-2">
                   <span className="text-on-surface-variant">Spring Boot 核心后端:</span>
-                  <span className="text-cyber-secondary font-bold">UP (8081 端口响应正常)</span>
+                  <span className={healthState.backendUp ? 'text-cyber-secondary font-bold' : 'text-cyber-error font-bold'}>
+                    {healthState.backendUp
+                      ? `UP (${healthState.backendMs != null ? `${healthState.backendMs}ms` : '8081 端口正常'})`
+                      : 'OFFLINE (连接异常)'}
+                  </span>
                 </div>
                 <div className="flex justify-between border-b border-outline-variant/10 pb-2">
                   <span className="text-on-surface-variant">MySQL 8.0 数据库:</span>
-                  <span className="text-cyber-secondary font-bold">CONNECTED (utf8mb4)</span>
+                  <span className={healthState.backendUp ? 'text-cyber-secondary font-bold' : 'text-cyber-error font-bold'}>
+                    {healthState.backendUp ? 'CONNECTED (utf8mb4)' : 'DISCONNECTED'}
+                  </span>
                 </div>
                 <div className="flex justify-between border-b border-outline-variant/10 pb-2">
                   <span className="text-on-surface-variant">WebSocket 告警推流:</span>
-                  <span className="text-cyber-primary font-bold">ESTABLISHED (实时监听中)</span>
+                  <span className={wsConnected ? 'text-cyber-primary font-bold' : 'text-amber-300 font-bold'}>
+                    {wsConnected ? 'ESTABLISHED (实时监听中)' : 'RECONNECTING (重连中)'}
+                  </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-on-surface-variant">YOLOv8 机器视觉引擎:</span>
-                  <span className="text-cyber-secondary font-bold">ONLINE (帧率 30fps)</span>
+                  <span className="text-on-surface-variant">YOLOv8 + SFace 视觉节点:</span>
+                  <span className={healthState.aiOnline ? 'text-cyber-secondary font-bold' : 'text-cyber-error font-bold'}>
+                    {healthState.aiOnline
+                      ? `ONLINE (${healthState.aiFps.toFixed(1)} FPS · ${healthState.aiDevice.toUpperCase()})`
+                      : 'OFFLINE (边缘脚本未运行)'}
+                  </span>
                 </div>
               </div>
 

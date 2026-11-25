@@ -1,5 +1,6 @@
 import React from 'react';
 import { Tab } from '../types';
+import { showCyberToast } from '../utils/cyberToast';
 import { 
   LayoutDashboard, 
   BellRing, 
@@ -72,8 +73,8 @@ interface SidebarProps {
       <div className="px-3 pt-4 border-t border-outline-variant/10 space-y-1">
         {/* Help/Support info toggle or trigger */}
         <button
-          onClick={() => alert('门禁告警平台技术支持：如需协助，请联系开发团队或访问内网工单系统。加密级别：AES-256。')}
-          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-data-sm text-on-surface-variant hover:text-on-surface hover:bg-cyber-surface-high/40 transition-all text-left"
+          onClick={() => showCyberToast('智能门禁安防平台 v1.5 · 边缘 YOLOv8n + YuNet/SFace + 静默防伪门控已就绪', 'info')}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-data-sm text-on-surface-variant hover:text-on-surface hover:bg-cyber-surface-high/40 transition-all text-left cursor-pointer"
         >
           <HelpCircle className="w-5 h-5 text-on-surface-variant/80" />
           <span className="font-sans text-xs tracking-wider">技术支持</span>

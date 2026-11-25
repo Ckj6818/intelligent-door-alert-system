@@ -174,6 +174,7 @@ public class WebhookNotifyService {
         return switch (type) {
             case "TAILGATING" -> "🚨 【尾随闯入告警】";
             case "LOITERING" -> "⚠️ 【门前徘徊超时告警】";
+            case "SPOOFING" -> "🛡️ 【照片/屏幕防伪拦截告警】";
             default -> "🔴 【未授权人员入侵告警】";
         };
     }

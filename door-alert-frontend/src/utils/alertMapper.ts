@@ -49,6 +49,11 @@ export function mapToAlert(raw: AlertPayload): Alert {
   if (authStatus === 'AUTHORIZED') {
     type = `授权通行 · ${recognizedName || '已知人员'}`;
     typeBadge = 'success';
+  } else if ((raw.alertType || '').toUpperCase() === 'SPOOFING') {
+    type = recognizedName
+      ? `防伪拦截 · ${recognizedName}`
+      : '防伪拦截 · 疑似照片/屏幕介质';
+    typeBadge = 'warning';
   } else if ((raw.alertType || '').toUpperCase() === 'TAILGATING') {
     type = '尾随闯入';
     typeBadge = 'warning';
@@ -83,6 +88,9 @@ export function mapToAlert(raw: AlertPayload): Alert {
     areaRatio,
     alertLevel,
     alertType: (raw.alertType || 'INTRUSION').toString().toUpperCase(),
+    handler: raw.handler,
+    handleTime: raw.handleTime,
+    handleRemark: raw.handleRemark,
   };
 }
 

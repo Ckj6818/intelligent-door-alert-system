@@ -12,6 +12,15 @@ import {
 } from 'lucide-react';
 import { Alert, TrashItem, LiveFeedItem, AuthStatus } from '../types';
 import { handleAlert, deleteAlert, restoreAlert, clearAllAlerts, clearRecycleBinPermanently } from '@/api/index';
+import { showCyberToast } from '../utils/cyberToast';
+
+const WORKFLOW_QUICK_REMARKS = [
+  '现场核实已劝离',
+  '访客/快递临时送件',
+  '保洁/路过人员误触',
+  '光线阴影误报归档',
+  '照片/屏幕防伪演练',
+];
 
 /** 从告警行提取回收站快照（保留 authStatus 等字段） */
 function alertToTrashItem(al: Alert, deletedTime = '刚刚'): TrashItem {
@@ -31,6 +40,9 @@ function alertToTrashItem(al: Alert, deletedTime = '刚刚'): TrashItem {
     alertType: al.alertType,
     status: al.status,
     statusType: al.statusType,
+    handler: al.handler,
+    handleTime: al.handleTime,
+    handleRemark: al.handleRemark,
   };
 }
 
@@ -74,6 +86,9 @@ function trashItemToAlert(item: TrashItem): Alert {
     areaRatio: item.areaRatio,
     alertLevel: item.alertLevel,
     alertType: item.alertType,
+    handler: item.handler,
+    handleTime: item.handleTime,
+    handleRemark: item.handleRemark,
   };
 }
 
@@ -98,6 +113,9 @@ export default function AlertWorkflowTab({
   const [filterType, setFilterType] = useState<string>('all');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [handleModalRow, setHandleModalRow] = useState<Alert | null>(null);
+  const [remarkInput, setRemarkInput] = useState<string>('现场核实已劝离');
+  const [submittingHandle, setSubmittingHandle] = useState<boolean>(false);
 
   const handleSelectRow = (id: string) => {
     setSelectedIds(prev => 
@@ -138,34 +156,77 @@ export default function AlertWorkflowTab({
           });
           setTrashItems(prev => [...newTrashItems, ...prev]);
           setSelectedIds([]);
-          alert('批量逻辑删除成功，已移入回收站。');
+          showCyberToast(`已将选中的 ${selectedIds.length} 条告警记录移入回收站`, 'info');
         })
         .catch(err => {
           console.error('Batch delete failed', err);
-          alert('批量删除出现异常，请确认网络连接与后端状态。');
+          showCyberToast('批量删除出现异常，请确认管理员权限与网络连接', 'error');
         });
     }
   };
 
-  // Interactive buttons handler
-  const handleProcess = (id: string, newStatus: string) => {
-    const rawId = id.replace('AL-', '');
-    handleAlert(rawId)
-      .then(() => {
+  // 打开工单复核处置结论弹窗
+  const openHandleModal = (row: Alert) => {
+    setHandleModalRow(row);
+    setRemarkInput(row.handleRemark || '现场核实已劝离');
+  };
+
+  // 提交确认处理（附带处置结论，后端自动记录当前操作员与时间）
+  const submitConfirmHandle = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!handleModalRow) return;
+    const target = handleModalRow;
+    const rawId = String(target.rawId ?? target.id.replace('AL-', ''));
+    const finalRemark = remarkInput.trim() || '人工复核确认已处理';
+    setSubmittingHandle(true);
+    handleAlert(rawId, { status: 1, handleRemark: finalRemark })
+      .then((vo: any) => {
         setAlerts(prev => prev.map(al => {
-          if (al.id === id) {
-            return { 
-              ...al, 
+          if (al.id === target.id) {
+            return {
+              ...al,
               status: '已处理',
-              statusType: 'success'
+              statusType: 'success',
+              handler: vo?.handler || localStorage.getItem('username') || 'admin',
+              handleTime: vo?.handleTime || new Date().toISOString(),
+              handleRemark: vo?.handleRemark || finalRemark,
             };
           }
           return al;
         }));
-        alert(`告警事件 ${id} 状态已更新为：已处理`);
+        setHandleModalRow(null);
+        showCyberToast(`工单 ${target.id} 已归档（结论：${finalRemark}）`, 'success');
       })
       .catch(err => {
         console.error('Failed to process alert', err);
+        showCyberToast('工单处置失败，请检查登录状态或权限', 'error');
+      })
+      .finally(() => setSubmittingHandle(false));
+  };
+
+  // 重新核实：真正将状态回退至待复核 (status=0)
+  const handleReopen = (row: Alert) => {
+    const rawId = String(row.rawId ?? row.id.replace('AL-', ''));
+    handleAlert(rawId, { status: 0, handleRemark: '发起二次人工复核' })
+      .then((vo: any) => {
+        setAlerts(prev => prev.map(al => {
+          if (al.id === row.id) {
+            return {
+              ...al,
+              status: '待复核',
+              statusType: 'error',
+              handler: vo?.handler || localStorage.getItem('username') || 'admin',
+              handleTime: undefined,
+              handleRemark: vo?.handleRemark || '发起二次人工复核',
+            };
+          }
+          return al;
+        }));
+        showCyberToast(`工单 ${row.id} 已退回「待复核」状态`, 'warning');
+      })
+      .catch(err => {
+        console.error('Failed to reopen alert', err);
+        showCyberToast('状态回退失败，请稍后重试', 'error');
       });
   };
 
@@ -181,10 +242,11 @@ export default function AlertWorkflowTab({
           ? { ...alertToTrashItem(row), name: name || alertToTrashItem(row).name }
           : { id: rawId, name: name || `告警日志_${id}`, deletedTime: '刚刚' };
         setTrashItems(prev => [newTrash, ...prev]);
-        alert(`告警记录 ${id} 已移至回收站（逻辑删除）。`);
+        showCyberToast(`告警记录 ${id} 已移至回收站`, 'info');
       })
       .catch(err => {
         console.error('Failed to delete alert', err);
+        showCyberToast('删除失败（仅系统管理员可执行删除）', 'error');
       });
   };
 
@@ -194,7 +256,7 @@ export default function AlertWorkflowTab({
       .then(() => {
         setTrashItems(prev => prev.filter(t => t.id !== item.id));
         setAlerts(prev => [trashItemToAlert(item), ...prev]);
-        alert(`告警轨迹记录 ${item.id} 恢复成功。`);
+        showCyberToast(`告警记录 #${item.id} 已恢复至工作流列表`, 'success');
       })
       .catch(err => console.error(err));
   };
@@ -207,7 +269,7 @@ export default function AlertWorkflowTab({
         setTrashItems(prev => [...deletedAlerts, ...prev]);
         setAlerts([]);
         setLiveFeed([]);
-        alert('所有当前活动告警已成功移至回收站。');
+        showCyberToast('当前全部活动告警已移入回收站', 'info');
       })
       .catch(err => console.error(err));
   };
@@ -222,21 +284,21 @@ export default function AlertWorkflowTab({
           ...prev,
         ]);
         setTrashItems([]);
-        alert('回收站中的所有逻辑记录已恢复至告警工作流表格。');
+        showCyberToast('回收站记录已全部恢复至工作流表格', 'success');
       })
       .catch(err => console.error(err));
   };
 
   const handleClearTrashPermanently = () => {
-    if (confirm('您确定要永久清除回收站中的所有安全追踪记录吗？此操作将清空数据库归档且无法撤销。')) {
+    if (confirm('您确定要永久清除回收站中的所有安全追踪记录吗？此操作将清空数据库归档且同步删除磁盘抓拍图。')) {
       clearRecycleBinPermanently()
         .then(() => {
           setTrashItems([]);
-          alert('回收站记录已从数据库中永久清除。');
+          showCyberToast('回收站记录及关联抓拍图片已永久清除', 'success');
         })
         .catch(err => {
           console.error('Failed to clear recycle bin', err);
-          alert('清空失败：请确认拥有管理员权限或后端正常运行。');
+          showCyberToast('清空失败：请确认拥有管理员权限或后端正常运行', 'error');
         });
     }
   };
@@ -300,6 +362,7 @@ export default function AlertWorkflowTab({
               <option value="INTRUSION">未授权入侵 (INTRUSION)</option>
               <option value="TAILGATING">尾随闯入 (TAILGATING)</option>
               <option value="LOITERING">门前徘徊 (LOITERING)</option>
+              <option value="SPOOFING">防伪拦截 (SPOOFING)</option>
             </select>
             <Filter className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none" />
           </div>
@@ -436,25 +499,33 @@ export default function AlertWorkflowTab({
                     </div>
                   </td>
 
-                  {/* Pulse dot Status column */}
+                  {/* Pulse dot Status & Disposition Audit column */}
                   <td className="px-6 py-5">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        row.statusType === 'error' 
-                          ? 'bg-cyber-error animate-pulse' 
-                          : row.statusType === 'success' 
-                          ? 'bg-cyber-secondary' 
-                          : 'bg-on-surface-variant/60 animate-pulse'
-                      }`} />
-                      <span className={`text-data-sm font-bold ${
-                        row.statusType === 'error'
-                          ? 'text-cyber-error'
-                          : row.statusType === 'success'
-                          ? 'text-cyber-secondary'
-                          : 'text-on-surface-variant'
-                      }`}>
-                        {row.status}
-                      </span>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          row.statusType === 'error' 
+                            ? 'bg-cyber-error animate-pulse' 
+                            : row.statusType === 'success' 
+                            ? 'bg-cyber-secondary' 
+                            : 'bg-on-surface-variant/60 animate-pulse'
+                        }`} />
+                        <span className={`text-data-sm font-bold ${
+                          row.statusType === 'error'
+                            ? 'text-cyber-error'
+                            : row.statusType === 'success'
+                            ? 'text-cyber-secondary'
+                            : 'text-on-surface-variant'
+                        }`}>
+                          {row.status}
+                        </span>
+                      </div>
+                      {(row.handleRemark || row.handler) && (
+                        <div className="text-[10px] text-on-surface-variant/85 max-w-[230px] truncate" title={`${row.handler ? `处置人: ${row.handler} · ` : ''}${row.handleRemark || ''}`}>
+                          {row.handler && <span className="text-cyber-primary font-mono mr-1">[{row.handler}]</span>}
+                          <span>{row.handleRemark}</span>
+                        </div>
+                      )}
                     </div>
                   </td>
 
@@ -463,16 +534,16 @@ export default function AlertWorkflowTab({
                     <div className="flex justify-end gap-2">
                       {row.status !== '已处理' && (
                         <button 
-                          onClick={() => handleProcess(row.id, '已处理')}
-                          className="px-3 py-1 bg-cyber-primary-dim/20 border border-cyber-primary/30 text-cyber-primary text-xs font-sans font-bold hover:bg-cyber-primary hover:text-cyber-bg transition-all cursor-pointer"
+                          onClick={() => openHandleModal(row)}
+                          className="px-3 py-1 bg-cyber-primary-dim/20 border border-cyber-primary/30 text-cyber-primary text-xs font-sans font-bold hover:bg-cyber-primary hover:text-cyber-bg transition-all cursor-pointer rounded"
                         >
                           确认处理
                         </button>
                       )}
                       {row.status === '已处理' && (
                         <button 
-                          onClick={() => handleProcess(row.id, 'investigating')}
-                          className="px-3 py-1 bg-cyber-warning-dim/20 border border-cyber-warning/30 text-cyber-warning text-xs font-sans font-bold hover:bg-cyber-warning hover:text-cyber-bg transition-all cursor-pointer"
+                          onClick={() => handleReopen(row)}
+                          className="px-3 py-1 bg-cyber-warning-dim/20 border border-cyber-warning/30 text-cyber-warning text-xs font-sans font-bold hover:bg-cyber-warning hover:text-cyber-bg transition-all cursor-pointer rounded"
                         >
                           重新核实
                         </button>
@@ -648,6 +719,95 @@ export default function AlertWorkflowTab({
             <div className="mt-3 text-center text-xs text-on-surface-variant font-sans">
               抓拍大图预览（点击外围空白区域或右上角按钮可关闭）
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 工单复核处置结论弹窗 */}
+      {handleModalRow && (
+        <div
+          className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4 font-sans"
+          onClick={() => setHandleModalRow(null)}
+        >
+          <div
+            className="glass-panel w-full max-w-md rounded-xl p-6 border border-cyber-primary/35 shadow-2xl space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-outline-variant/15 pb-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-cyber-primary" />
+                <h3 className="text-sm font-bold text-on-surface">告警工单复核归档 · {handleModalRow.id}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHandleModalRow(null)}
+                className="text-on-surface-variant hover:text-on-surface text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={submitConfirmHandle} className="space-y-4">
+              <div className="p-3 rounded-lg bg-cyber-surface-lowest border border-outline-variant/15 text-xs space-y-1">
+                <p className="text-on-surface font-bold">{handleModalRow.type}</p>
+                <p className="text-on-surface-variant text-[11px]">
+                  来源：{handleModalRow.device} · 触发时间：{handleModalRow.date} {handleModalRow.time}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-on-surface-variant block">
+                  一键点选常见处置结论
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {WORKFLOW_QUICK_REMARKS.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setRemarkInput(tag)}
+                      className={`px-2.5 py-1 rounded text-[11px] border transition-all cursor-pointer ${
+                        remarkInput === tag
+                          ? 'border-cyber-primary bg-cyber-primary/20 text-cyber-primary font-bold'
+                          : 'border-outline-variant/30 bg-cyber-surface-lowest text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-on-surface-variant block">
+                  复核处置备注（同步写入数据库与导出报表）
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={remarkInput}
+                  onChange={(e) => setRemarkInput(e.target.value)}
+                  placeholder="请输入现场核查结果或归档原因..."
+                  className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded-lg px-3 py-2 text-xs text-on-surface outline-none focus:border-cyber-primary"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2.5 pt-2 border-t border-outline-variant/10">
+                <button
+                  type="button"
+                  onClick={() => setHandleModalRow(null)}
+                  className="px-4 py-2 rounded border border-outline-variant/30 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingHandle}
+                  className="px-5 py-2 rounded bg-cyber-primary text-cyber-bg text-xs font-bold hover:brightness-110 disabled:opacity-50 cursor-pointer"
+                >
+                  {submittingHandle ? '正在归档...' : '确认归档工单'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

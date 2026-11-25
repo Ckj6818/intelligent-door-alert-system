@@ -22,9 +22,12 @@ public class AlertLogDTO {
     /** 识别到的姓名 */
     private String recognizedName;
 
-    /** INTRUSION / TAILGATING / LOITERING */
+    /** INTRUSION / TAILGATING / LOITERING / SPOOFING */
     private String alertType;
 
     /** 0-未处理, 1-已处理 */
     private Integer status;
+
+    /** 处置结论备注 */
+    private String handleRemark;
 }

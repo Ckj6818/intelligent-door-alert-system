@@ -1,6 +1,7 @@
 package com.dooralert.controller;
 
 import cn.dev33.satoken.annotation.SaCheckRole;
+import cn.dev33.satoken.stp.StpUtil;
 import com.dooralert.common.Result;
 import com.dooralert.dto.LoginDTO;
 import com.dooralert.dto.SysUserDTO;
@@ -12,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 系统用户接口：登录（公开）+ 安保人员账户管理（仅 ADMIN）
@@ -67,6 +69,21 @@ public class SysUserController {
             return sysUserService.resetPassword(id)
                     ? Result.success("密码已重置为 123456", true)
                     : Result.error("用户不存在或重置失败");
+        } catch (RuntimeException e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    /**
+     * 当前登录账号修改个人密码（ADMIN / OPERATOR 均可用）
+     */
+    @PutMapping("/users/change-password")
+    public Result<Boolean> changePassword(@RequestBody Map<String, String> body) {
+        try {
+            Long userId = StpUtil.getLoginIdAsLong();
+            String oldPwd = body != null ? body.get("oldPassword") : null;
+            String newPwd = body != null ? body.get("newPassword") : null;
+            return Result.success("密码修改成功，下次登录请使用新密码", sysUserService.changePassword(userId, oldPwd, newPwd));
         } catch (RuntimeException e) {
             return Result.error(e.getMessage());
         }

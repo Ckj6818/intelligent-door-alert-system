@@ -13,6 +13,8 @@ import com.dooralert.service.PassageLogService;
 import com.dooralert.service.WebhookNotifyService;
 import com.dooralert.vo.AlertLogVO;
 import com.dooralert.vo.AlertWsPayload;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,7 +44,42 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
     private WebhookNotifyService webhookNotifyService;
 
     @Value("${alert.recycle.retention-hours:168}")
-    private int recycleRetentionHours;
+    private volatile int recycleRetentionHours;
+
+    private final ObjectMapper policyMapper = new ObjectMapper();
+
+    @PostConstruct
+    public void initRecyclePolicy() {
+        try {
+            java.nio.file.Path p = java.nio.file.Paths.get(System.getProperty("user.dir"), "recycle-policy.json");
+            if (java.nio.file.Files.isRegularFile(p)) {
+                java.util.Map<?, ?> saved = policyMapper.readValue(p.toFile(), java.util.Map.class);
+                if (saved != null && saved.get("retentionHours") != null) {
+                    this.recycleRetentionHours = Math.max(0, Integer.parseInt(String.valueOf(saved.get("retentionHours"))));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("加载 recycle-policy.json 失败: {}", e.getMessage());
+        }
+    }
+
+    @Override
+    public int getRecycleRetentionHours() {
+        return recycleRetentionHours;
+    }
+
+    @Override
+    public synchronized int updateRecycleRetentionHours(int retentionHours) {
+        this.recycleRetentionHours = Math.max(0, retentionHours);
+        try {
+            java.nio.file.Path p = java.nio.file.Paths.get(System.getProperty("user.dir"), "recycle-policy.json");
+            policyMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(p.toFile(), java.util.Map.of("retentionHours", this.recycleRetentionHours));
+        } catch (Exception e) {
+            log.warn("保存 recycle-policy.json 失败: {}", e.getMessage());
+        }
+        return this.recycleRetentionHours;
+    }
 
     @Override
     public IPage<AlertLogVO> pageAlerts(long current, long size) {
@@ -84,12 +121,37 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
 
     @Override
     public boolean handleAlert(Long id) {
+        return handleAlertWithAudit(id, 1, "人工复核确认已处理", "system") != null;
+    }
+
+    @Override
+    public AlertLogVO handleAlertWithAudit(Long id, Integer status, String handleRemark, String operatorName) {
         AlertLog entity = this.getById(id);
         if (entity == null || Integer.valueOf(1).equals(entity.getDeleted())) {
-            return false;
+            return null;
         }
-        entity.setStatus(1);
-        return this.updateById(entity);
+        int targetStatus = (status != null && status == 0) ? 0 : 1;
+        String op = StringUtils.hasText(operatorName) ? operatorName.trim() : "admin";
+        String remark;
+        LocalDateTime handleTime;
+        if (targetStatus == 0) {
+            remark = StringUtils.hasText(handleRemark) ? handleRemark.trim() : "退回待复核（重新人工核实）";
+            handleTime = null;
+        } else {
+            remark = StringUtils.hasText(handleRemark) ? handleRemark.trim() : "人工复核确认已处理";
+            handleTime = LocalDateTime.now();
+        }
+        com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<AlertLog> wrapper =
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<>();
+        wrapper.eq(AlertLog::getId, id)
+                .set(AlertLog::getStatus, targetStatus)
+                .set(AlertLog::getHandler, op)
+                .set(AlertLog::getHandleTime, handleTime)
+                .set(AlertLog::getHandleRemark, remark);
+        if (!this.update(wrapper)) {
+            return null;
+        }
+        return getAlertById(id);
     }
 
     @Override
@@ -196,7 +258,8 @@ public class AlertLogServiceImpl extends ServiceImpl<AlertLogMapper, AlertLog> i
             return "INTRUSION";
         }
         String upper = raw.trim().toUpperCase(Locale.ROOT);
-        if ("TAILGATING".equals(upper) || "LOITERING".equals(upper) || "INTRUSION".equals(upper)) {
+        if ("TAILGATING".equals(upper) || "LOITERING".equals(upper)
+                || "SPOOFING".equals(upper) || "INTRUSION".equals(upper)) {
             return upper;
         }
         return "INTRUSION";

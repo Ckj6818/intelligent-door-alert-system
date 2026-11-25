@@ -34,6 +34,8 @@ Thumbs.db
 .env.*
 webhook-config.json
 door-alert-backend/webhook-config.json
+recycle-policy.json
+door-alert-backend/recycle-policy.json
 
 # AI Models & Temp
 *.pt

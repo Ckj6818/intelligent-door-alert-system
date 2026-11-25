@@ -9,6 +9,7 @@ import ReportsTab from './components/ReportsTab';
 import SettingsTab from './components/SettingsTab';
 import AlertPopup from './components/AlertPopup';
 import PassageToast from './components/PassageToast';
+import CyberToastHost from './components/CyberToastHost';
 import AuthorizedUsersModal from './components/AuthorizedUsersModal';
 import { getDeviceList, getAlertList, getRecycleBin, handleAlert } from '@/api/index';
 import {
@@ -19,6 +20,7 @@ import {
   resolveAreaRatio,
 } from './utils/alertMapper';
 import { playPassageChime, playThreatAlarm } from './utils/audioFeedback';
+import { showCyberToast } from './utils/cyberToast';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('token') !== null);
@@ -35,14 +37,14 @@ export default function App() {
   const [activeThreat, setActiveThreat] = useState<Alert | null>(null);
   const [passageNotices, setPassageNotices] = useState<PassageNotice[]>([]);
   const [showWhitelistModal, setShowWhitelistModal] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const dismissPassageNotice = useCallback((id: string) => {
     setPassageNotices((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
-  const fetchTelemetryData = () => {
+  const refreshDevicesSilently = useCallback(() => {
     if (!isLoggedIn) return;
-
     getDeviceList({ current: 1, size: 50 }).then((res: any) => {
       const records = res.records || [];
       const mappedDevices: DeviceStatus[] = records.map((d: any) => {
@@ -62,9 +64,15 @@ export default function App() {
         };
       });
       setDevices(mappedDevices);
-    }).catch((err) => console.error('Failed to fetch devices', err));
+    }).catch(() => {});
+  }, [isLoggedIn]);
 
-    getAlertList({ current: 1, size: 50 }).then((res: any) => {
+  const fetchTelemetryData = () => {
+    if (!isLoggedIn) return;
+
+    refreshDevicesSilently();
+
+    getAlertList({ current: 1, size: 100 }).then((res: any) => {
       const records = res.records || [];
       const mappedAlerts: Alert[] = records.map((raw: any) =>
         mapToAlert({
@@ -115,7 +123,10 @@ export default function App() {
 
   useEffect(() => {
     fetchTelemetryData();
-  }, [isLoggedIn]);
+    if (!isLoggedIn) return;
+    const timer = window.setInterval(refreshDevicesSilently, 10000);
+    return () => window.clearInterval(timer);
+  }, [isLoggedIn, refreshDevicesSilently]);
 
   useEffect(() => {
     const handleAuthExpired = () => {
@@ -141,7 +152,10 @@ export default function App() {
         const wsUrl = `${protocol}//${window.location.host}/api/ws/alerts`;
         socket = new WebSocket(wsUrl);
 
-        socket.onopen = () => console.log('WebSocket Connection Opened');
+        socket.onopen = () => {
+          console.log('WebSocket Connection Opened');
+          setWsConnected(true);
+        };
 
         socket.onmessage = (event) => {
           try {
@@ -201,6 +215,7 @@ export default function App() {
 
         socket.onclose = () => {
           console.warn('WebSocket Closed. Attempting reconnect in 3s...');
+          setWsConnected(false);
           socket = null;
           reconnectTimer = setTimeout(connectWs, 3000);
         };
@@ -268,17 +283,25 @@ export default function App() {
     setActiveThreat(null);
   };
 
-  /** 派单处置：标记已处理并关闭弹窗 */
-  const handleDispatchForces = () => {
+  /** 派单处置：记录处置人+处置结论并标记已处理 */
+  const handleDispatchForces = (remark?: string) => {
     const target = activeThreat;
+    const finalRemark = remark?.trim() || '安保派单：已通知值班人员现场核查';
     closeThreatPopup();
     if (target && target.rawId !== 'DEMO') {
-      handleAlert(target.rawId)
-        .then(() => {
+      handleAlert(target.rawId, { status: 1, handleRemark: finalRemark })
+        .then((vo: any) => {
           setAlerts((prev) =>
             prev.map((a) =>
               a.id === target.id
-                ? { ...a, status: '已处理', statusType: 'success' }
+                ? {
+                    ...a,
+                    status: '已处理',
+                    statusType: 'success',
+                    handler: vo?.handler || username,
+                    handleTime: vo?.handleTime || new Date().toISOString(),
+                    handleRemark: vo?.handleRemark || finalRemark,
+                  }
                 : a
             )
           );
@@ -286,20 +309,29 @@ export default function App() {
         .catch((err) => console.warn('派单处置 API 失败', err));
     }
     setActiveTab('workflow');
-    alert('派单处置已提交：安保小队已接收工单，请在告警工作流中跟踪进度。');
+    showCyberToast(`派单处置已提交（结论：${finalRemark}），已同步写入工单审计记录。`, 'success');
   };
 
-  /** 确认误报：标记已处理 */
-  const handleIgnoreForces = () => {
+  /** 确认误报：记录处置人+误报结论并标记已处理 */
+  const handleIgnoreForces = (remark?: string) => {
     const target = activeThreat;
+    const finalRemark = remark?.trim() || '人工复核：确认误报归档';
     closeThreatPopup();
     if (target && target.rawId !== 'DEMO') {
-      handleAlert(target.rawId)
-        .then(() => {
+      handleAlert(target.rawId, { status: 1, handleRemark: finalRemark })
+        .then((vo: any) => {
           setAlerts((prev) =>
             prev.map((a) =>
               a.id === target.id
-                ? { ...a, status: '已处理', statusType: 'success', type: '误报已确认' }
+                ? {
+                    ...a,
+                    status: '已处理',
+                    statusType: 'success',
+                    type: '误报已确认',
+                    handler: vo?.handler || username,
+                    handleTime: vo?.handleTime || new Date().toISOString(),
+                    handleRemark: vo?.handleRemark || finalRemark,
+                  }
                 : a
             )
           );
@@ -308,7 +340,7 @@ export default function App() {
     } else {
       setAlerts((prev) => prev.filter((a) => a.id !== target?.id));
     }
-    alert('已确认误报：事件已归档为常规过滤。');
+    showCyberToast(`已确认误报归档（备注：${finalRemark}）`, 'info');
   };
 
   const renderTabContent = () => {
@@ -381,6 +413,7 @@ export default function App() {
         setSearchQuery={setSearchQuery}
         username={username}
         alerts={alerts}
+        wsConnected={wsConnected}
         setActiveTab={setActiveTab}
         onOpenWhitelist={() => setShowWhitelistModal(true)}
       />
@@ -388,6 +421,8 @@ export default function App() {
       <main className="ml-[280px] pt-24 px-8 min-h-screen z-10 relative">
         <div className="max-w-[1600px] mx-auto">{renderTabContent()}</div>
       </main>
+
+      <CyberToastHost />
 
       {/* 右上角授权通行通知栈 */}
       <div className="fixed top-20 right-6 z-[105] flex flex-col gap-3 pointer-events-none">

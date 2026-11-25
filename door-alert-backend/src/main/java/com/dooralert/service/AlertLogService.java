@@ -26,6 +26,21 @@ public interface AlertLogService extends IService<AlertLog> {
     boolean handleAlert(Long id);
 
     /**
+     * 工单处置或状态回退（支持记录处置人、处置结论备注与重新核实 status=0）
+     */
+    AlertLogVO handleAlertWithAudit(Long id, Integer status, String handleRemark, String operatorName);
+
+    /**
+     * 获取当前回收站定时自动清理保留时长（小时，<=0 表示不自动清理）
+     */
+    int getRecycleRetentionHours();
+
+    /**
+     * 更新并持久化回收站定时自动清理保留时长（小时，<=0 表示不自动清理）
+     */
+    int updateRecycleRetentionHours(int retentionHours);
+
+    /**
      * 边缘端上报：UNAUTHORIZED → 待处理告警工单；AUTHORIZED → 通行日志
      */
     AlertWsPayload uploadAlert(AlertUploadDTO dto, org.springframework.web.multipart.MultipartFile file);

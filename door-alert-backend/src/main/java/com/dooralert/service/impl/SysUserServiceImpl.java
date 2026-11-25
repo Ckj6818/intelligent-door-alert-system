@@ -132,6 +132,26 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         return vo;
     }
 
+    @Override
+    public boolean changePassword(Long userId, String oldPassword, String newPassword) {
+        if (userId == null) {
+            throw new RuntimeException("登录状态无效");
+        }
+        if (newPassword == null || newPassword.trim().length() < 6) {
+            throw new RuntimeException("新密码长度不能少于 6 位");
+        }
+        SysUser user = this.getById(userId);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+        String oldPwd = oldPassword == null ? "" : oldPassword.trim();
+        if (!PASSWORD_ENCODER.matches(oldPwd, user.getPassword())) {
+            throw new RuntimeException("原密码验证不正确");
+        }
+        user.setPassword(PASSWORD_ENCODER.encode(newPassword.trim()));
+        return this.updateById(user);
+    }
+
     /**
      * Entity -> VO（脱敏，不暴露密码）
      */

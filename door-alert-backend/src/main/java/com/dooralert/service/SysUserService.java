@@ -45,4 +45,9 @@ public interface SysUserService extends IService<SysUser> {
      * 用户登录
      */
     LoginVO login(LoginDTO dto);
+
+    /**
+     * 当前登录用户修改个人密码
+     */
+    boolean changePassword(Long userId, String oldPassword, String newPassword);
 }

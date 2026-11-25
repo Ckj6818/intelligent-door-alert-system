@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { NodeReport, SystemUser } from '../types';
 import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts, getPassageTodayStats, getPassagePage, getDeviceList, getAlertList } from '@/api/index';
+import { showCyberToast } from '../utils/cyberToast';
 import * as XLSX from 'xlsx';
 
 interface ReportsTabProps {
@@ -115,7 +116,7 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
     try {
       const records = await exportAlerts();
       if (!records || records.length === 0) {
-        alert('当前暂无可导出的告警记录。');
+        showCyberToast('当前暂无可导出的告警记录', 'warning');
         return;
       }
       const rows = records.map((item: any) => {
@@ -132,17 +133,21 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           '危险等级': item.dangerLevel >= 3 ? '高危' : item.dangerLevel === 2 ? '中危' : '低危',
           '告警类型': item.alertType || 'INTRUSION',
           '识别姓名': item.recognizedName || '-',
-          '抓拍图片链接': imgUrl,
           '处置状态': item.status === 1 ? '已处理' : '待复核',
+          '处置操作员': item.handler || '-',
+          '处置时间': item.handleTime ? new Date(item.handleTime).toLocaleString() : '-',
+          '处置结论备注': item.handleRemark || '-',
+          '抓拍图片链接': imgUrl,
         };
       });
       const worksheet = XLSX.utils.json_to_sheet(rows);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, '告警记录');
       XLSX.writeFile(workbook, '智能门禁告警报表.xlsx');
-      alert('门禁安防报警日志报表已成功导出为 Excel。');
+      showCyberToast(`已成功导出 ${rows.length} 条告警记录（含处置人与复核结论）`, 'success');
     } catch (error) {
       console.error('Export failed', error);
+      showCyberToast('导出失败，请确认使用管理员账号登录', 'error');
     }
   };
 
@@ -152,8 +157,8 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   // User creation state
   const [showAddModal, setShowAddModal] = useState(false);
   const [newUsername, setNewUsername] = useState('');
-  const [newRole, setNewRole] = useState<'Admin' | 'Operator'>('Operator');
-  const [newStatus, setNewStatus] = useState<'Active' | 'Offline'>('Active');
+  const [newNickname, setNewNickname] = useState('');
+  const [newPassword, setNewPassword] = useState('123456');
 
   const fetchUsers = () => {
     getUserList()
@@ -169,6 +174,7 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           return {
             id: String(item.id),
             username: item.username,
+            nickname: item.nickname || item.username,
             role: item.role === 'ADMIN' ? 'Admin' : 'Operator',
             status: 'Active',
             initials
@@ -187,16 +193,28 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   const handleAddUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUsername.trim()) return;
+    if (newPassword.trim().length < 6) {
+      showCyberToast('初始密码长度不能少于 6 位', 'warning');
+      return;
+    }
 
-    addOperatorUser({ username: newUsername.trim(), password: '123456' })
+    addOperatorUser({
+      username: newUsername.trim(),
+      nickname: newNickname.trim() || newUsername.trim(),
+      password: newPassword.trim(),
+    })
       .then(() => {
         fetchUsers();
+        const created = newUsername.trim();
         setNewUsername('');
+        setNewNickname('');
+        setNewPassword('123456');
         setShowAddModal(false);
-        alert(`已成功为节点代理创建操作员账号：${newUsername}。默认密码为：123456`);
+        showCyberToast(`已成功创建安保值班员账号：${created}`, 'success');
       })
-      .catch(err => {
+      .catch((err: any) => {
         console.error('Failed to create user', err);
+        showCyberToast(typeof err === 'string' ? err : err?.message || '创建账号失败（用户名可能已存在）', 'error');
       });
   };
 
@@ -206,7 +224,7 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
       deleteOperatorUser(id)
         .then(() => {
           setUsers(prev => prev.filter(u => u.id !== id));
-          alert(`操作员 "${name}" 账号凭证已注销清除。`);
+          showCyberToast(`操作员 "${name}" 账号凭证已注销`, 'info');
         })
         .catch(err => console.error(err));
     }
@@ -217,7 +235,7 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
     if (confirm(`是否确认将操作员 "${name}" 的登录密码重置为：123456？`)) {
       resetOperatorPassword(id)
         .then(() => {
-          alert(`操作员 "${name}" 密码已重置为：123456。`);
+          showCyberToast(`操作员 "${name}" 密码已重置为 123456`, 'success');
         })
         .catch(err => console.error('Failed to reset password', err));
     }
@@ -422,7 +440,12 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
                           <div className="w-7 h-7 rounded bg-cyber-primary-dim border border-cyber-primary/30 flex items-center justify-center text-cyber-primary text-xs font-mono font-bold">
                             {u.initials}
                           </div>
-                          <span className="font-mono text-xs font-bold text-on-surface">{u.username}</span>
+                          <div>
+                            <span className="font-mono text-xs font-bold text-on-surface block">{u.username}</span>
+                            {u.nickname && u.nickname !== u.username && (
+                              <span className="text-[10px] text-on-surface-variant">{u.nickname}</span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -531,11 +554,11 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
 
             <form onSubmit={handleAddUserSubmit} className="space-y-4 font-sans">
               <div className="space-y-1">
-                <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">操作员账户名</label>
+                <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">登录账号名 (唯一)</label>
                 <input
                   type="text"
                   required
-                  placeholder="例如：chen_kejie_sec"
+                  placeholder="例如：guard_zhang"
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
                   className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-sm text-on-surface outline-none focus:border-cyber-primary/50 font-sans"
@@ -544,29 +567,31 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">权限等级</label>
-                  <select
-                    value={newRole}
-                    onChange={(e) => setNewRole(e.target.value as 'Admin' | 'Operator')}
+                  <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">值班员姓名 / 昵称</label>
+                  <input
+                    type="text"
+                    placeholder="例如：夜班值班员李四"
+                    value={newNickname}
+                    onChange={(e) => setNewNickname(e.target.value)}
                     className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-sm text-on-surface outline-none focus:border-cyber-primary/50 font-sans"
-                  >
-                    <option value="Operator">一般操作员 (Operator)</option>
-                    <option value="Admin">超级管理员 (Admin)</option>
-                  </select>
+                  />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">初始代理状态</label>
-                  <select
-                    value={newStatus}
-                    onChange={(e) => setNewStatus(e.target.value as 'Active' | 'Offline')}
-                    className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-sm text-on-surface outline-none focus:border-cyber-primary/50 font-sans"
-                  >
-                    <option value="Active">正常工作 (Active)</option>
-                    <option value="Offline">离线注销 (Offline)</option>
-                  </select>
+                  <label className="text-label-caps text-on-surface-variant text-[10px] ml-0.5">初始登录密码 (≥6位)</label>
+                  <input
+                    type="text"
+                    required
+                    minLength={6}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-sm font-mono text-on-surface outline-none focus:border-cyber-primary/50"
+                  />
                 </div>
               </div>
+              <p className="text-[11px] text-on-surface-variant/80">
+                新建账号默认分配 <span className="text-cyber-primary font-mono">OPERATOR</span> 安保值班员角色（具备实时大屏监控与告警工单处置权限）。
+              </p>
 
               <div className="flex gap-3 justify-end pt-4 border-t border-outline-variant/10">
                 <button
