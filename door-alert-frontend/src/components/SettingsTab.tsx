@@ -61,6 +61,8 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState('');
   const [webhookMinLevel, setWebhookMinLevel] = useState(2);
+  const [webhookPublicBaseUrl, setWebhookPublicBaseUrl] = useState('');
+  const [webhookNotifyOffline, setWebhookNotifyOffline] = useState(true);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookMsg, setWebhookMsg] = useState('');
 
@@ -86,6 +88,8 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
         setWebhookEnabled(Boolean(cfg.enabled));
         setWebhookUrl(cfg.url || '');
         if (cfg.minDangerLevel) setWebhookMinLevel(Number(cfg.minDangerLevel));
+        if (cfg.publicBaseUrl != null) setWebhookPublicBaseUrl(cfg.publicBaseUrl);
+        if (cfg.notifyDeviceOffline != null) setWebhookNotifyOffline(Boolean(cfg.notifyDeviceOffline));
       })
       .catch(() => {});
 
@@ -207,9 +211,11 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
       enabled: webhookEnabled,
       url: webhookUrl.trim(),
       minDangerLevel: webhookMinLevel,
+      publicBaseUrl: webhookPublicBaseUrl.trim(),
+      notifyDeviceOffline: webhookNotifyOffline,
     })
       .then(() => {
-        setWebhookMsg('Webhook 推送配置已保存！高危告警入库后将自动异步推送到对应群机器人。');
+        setWebhookMsg('Webhook 推送配置已保存！高危告警与节点离线将自动推送，并附带内嵌抓拍预览图。');
         showCyberToast('Webhook 推送配置已保存', 'success');
       })
       .catch((err: any) => {
@@ -225,7 +231,7 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
     }
     setWebhookBusy(true);
     setWebhookMsg('');
-    testWebhook(webhookUrl.trim())
+    testWebhook(webhookUrl.trim(), webhookPublicBaseUrl.trim() || undefined)
       .then((resp) => {
         setWebhookMsg(`测试消息已发送！响应：${resp || 'OK'}`);
         showCyberToast('Webhook 测试消息发送成功', 'success');
@@ -583,6 +589,47 @@ export default function SettingsTab({ onThresholdChange }: SettingsTabProps) {
                   placeholder="https://oapi.dingtalk.com/robot/send?access_token=... 或 企微/飞书 Webhook"
                   className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-xs font-mono text-on-surface outline-none focus:border-cyber-primary"
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-label-caps text-on-surface-variant text-[10px] font-sans">
+                    抓拍图片外部访问基地址（用于钉钉/企微卡片内嵌预览图）
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setWebhookPublicBaseUrl(window.location.origin)}
+                    className="text-[10px] text-cyber-primary hover:underline cursor-pointer"
+                  >
+                    填入当前访问地址
+                  </button>
+                </div>
+                <input
+                  type="url"
+                  value={webhookPublicBaseUrl}
+                  onChange={(e) => setWebhookPublicBaseUrl(e.target.value)}
+                  placeholder="例如：http://172.20.10.3:5173（同局域网）或 https://xxx.trycloudflare.com（公网穿透直接出缩略图）"
+                  className="w-full bg-cyber-surface-lowest border border-outline-variant/30 rounded py-2 px-3 text-xs font-mono text-on-surface outline-none focus:border-cyber-primary"
+                />
+                <p className="text-[10px] text-on-surface-variant/75">
+                  * 填写局域网 IP 后同 Wi-Fi 手机可点开原图；配置公网 HTTPS 域名/穿透地址后钉钉卡片将直接展示内嵌抓拍缩略图。
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded bg-cyber-surface-low/50 border border-outline-variant/15">
+                <div>
+                  <p className="text-xs text-on-surface font-bold">边缘设备掉线自动告警</p>
+                  <p className="text-[10px] text-on-surface-variant">边缘节点超过 30 秒未上报心跳时主动推送断联提醒</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer select-none shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={webhookNotifyOffline}
+                    onChange={(e) => setWebhookNotifyOffline(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-cyber-surface-lowest rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-on-surface-variant after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyber-primary" />
+                </label>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

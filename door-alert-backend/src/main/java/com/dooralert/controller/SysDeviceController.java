@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.dooralert.common.Result;
 import com.dooralert.dto.SysDeviceDTO;
 import com.dooralert.service.SysDeviceService;
+import com.dooralert.service.WebhookNotifyService;
 import com.dooralert.vo.DoorHeartbeatVO;
 import com.dooralert.vo.EdgeConfigVO;
 import com.dooralert.vo.SysDeviceVO;
@@ -13,10 +14,13 @@ import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 设备管理接口
@@ -27,10 +31,16 @@ import java.util.Map;
 public class SysDeviceController {
 
     /** 设备 ID → 最后心跳时间戳（毫秒），线程安全内存池 */
-    private static final Map<Long, Long> deviceHeartbeatMap = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<Long, Long> deviceHeartbeatMap = new ConcurrentHashMap<>();
+
+    /** 已发送离线告警的设备 ID 集合（防止重复刷屏；恢复心跳后自动移除） */
+    private static final Set<Long> offlineNotifiedSet = ConcurrentHashMap.newKeySet();
 
     @Autowired
     private SysDeviceService sysDeviceService;
+
+    @Autowired
+    private WebhookNotifyService webhookNotifyService;
 
     @Value("${device.heartbeat.timeout-seconds:30}")
     private long heartbeatTimeoutSeconds;
@@ -44,6 +54,30 @@ public class SysDeviceController {
     public static void touchHeartbeat(Long deviceId) {
         if (deviceId != null) {
             deviceHeartbeatMap.put(deviceId, System.currentTimeMillis());
+            offlineNotifiedSet.remove(deviceId);
+        }
+    }
+
+    /**
+     * 周期性巡检曾经在线的边缘设备：若心跳超时判定离线，则触发一次钉钉/企微离线告警
+     */
+    @Scheduled(fixedDelay = 15_000, initialDelay = 30_000)
+    public void monitorDeviceOfflineTimeouts() {
+        long now = System.currentTimeMillis();
+        long timeoutMs = Math.max(10L, heartbeatTimeoutSeconds) * 1000L;
+        for (Map.Entry<Long, Long> entry : deviceHeartbeatMap.entrySet()) {
+            Long deviceId = entry.getKey();
+            long elapsedMs = now - entry.getValue();
+            if (elapsedMs > timeoutMs && offlineNotifiedSet.add(deviceId)) {
+                try {
+                    SysDeviceVO vo = sysDeviceService.getDeviceById(deviceId);
+                    String devName = vo != null ? vo.getDeviceName() : ("设备 #" + deviceId);
+                    String loc = vo != null ? vo.getLocation() : "";
+                    webhookNotifyService.sendDeviceOfflineAsync(deviceId, devName, loc, elapsedMs / 1000L);
+                } catch (Exception e) {
+                    log.warn("巡检设备离线告警异常 deviceId={}: {}", deviceId, e.getMessage());
+                }
+            }
         }
     }
 

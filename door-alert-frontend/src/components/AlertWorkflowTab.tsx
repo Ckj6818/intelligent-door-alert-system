@@ -13,6 +13,7 @@ import {
 import { Alert, TrashItem, LiveFeedItem, AuthStatus } from '../types';
 import { handleAlert, deleteAlert, restoreAlert, clearAllAlerts, clearRecycleBinPermanently } from '@/api/index';
 import { showCyberToast } from '../utils/cyberToast';
+import { showCyberConfirm } from '../utils/cyberConfirm';
 
 const WORKFLOW_QUICK_REMARKS = [
   '现场核实已劝离',
@@ -136,9 +137,15 @@ export default function AlertWorkflowTab({
     }
   };
 
-  const handleBatchDelete = () => {
+  const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return;
-    if (confirm(`您确定要逻辑删除选中的 ${selectedIds.length} 条告警记录吗？`)) {
+    const ok = await showCyberConfirm({
+      title: '批量移入回收站确认',
+      message: `您确定要逻辑删除选中的 ${selectedIds.length} 条告警记录吗？\n删除后仍可在下方回收站中随时恢复。`,
+      confirmText: '确认移入回收站',
+      tone: 'warning',
+    });
+    if (ok) {
       const rawIds = selectedIds.map(id => id.replace('AL-', ''));
       Promise.all(rawIds.map(rawId => deleteAlert(rawId)))
         .then(() => {
@@ -289,8 +296,14 @@ export default function AlertWorkflowTab({
       .catch(err => console.error(err));
   };
 
-  const handleClearTrashPermanently = () => {
-    if (confirm('您确定要永久清除回收站中的所有安全追踪记录吗？此操作将清空数据库归档且同步删除磁盘抓拍图。')) {
+  const handleClearTrashPermanently = async () => {
+    const ok = await showCyberConfirm({
+      title: '永久清空回收站高危确认',
+      message: '您确定要永久清除回收站中的所有安全追踪记录吗？\n此操作将彻底清空数据库归档并同步删除磁盘抓拍图片，不可撤销！',
+      confirmText: '确认永久销毁',
+      tone: 'danger',
+    });
+    if (ok) {
       clearRecycleBinPermanently()
         .then(() => {
           setTrashItems([]);

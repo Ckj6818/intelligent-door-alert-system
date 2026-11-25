@@ -62,6 +62,8 @@ public class WebhookNotifyService {
         runtimeConfig.setEnabled(defaultEnabled);
         runtimeConfig.setUrl(defaultUrl == null ? "" : defaultUrl.trim());
         runtimeConfig.setMinDangerLevel(defaultMinDangerLevel);
+        runtimeConfig.setPublicBaseUrl(publicBaseUrl == null ? "" : publicBaseUrl.trim());
+        runtimeConfig.setNotifyDeviceOffline(true);
         loadPersistedConfig();
     }
 
@@ -70,6 +72,8 @@ public class WebhookNotifyService {
         copy.setEnabled(runtimeConfig.isEnabled());
         copy.setUrl(runtimeConfig.getUrl());
         copy.setMinDangerLevel(runtimeConfig.getMinDangerLevel());
+        copy.setPublicBaseUrl(runtimeConfig.getPublicBaseUrl());
+        copy.setNotifyDeviceOffline(runtimeConfig.isNotifyDeviceOffline());
         return copy;
     }
 
@@ -79,9 +83,20 @@ public class WebhookNotifyService {
             runtimeConfig.setUrl(incoming.getUrl() == null ? "" : incoming.getUrl().trim());
             int lvl = incoming.getMinDangerLevel();
             runtimeConfig.setMinDangerLevel(Math.max(1, Math.min(3, lvl)));
+            if (incoming.getPublicBaseUrl() != null) {
+                runtimeConfig.setPublicBaseUrl(incoming.getPublicBaseUrl().trim().replaceAll("/+$", ""));
+            }
+            runtimeConfig.setNotifyDeviceOffline(incoming.isNotifyDeviceOffline());
             savePersistedConfig();
         }
         return getConfig();
+    }
+
+    private String resolveEffectivePublicBaseUrl(WebhookConfig cfg) {
+        if (cfg != null && StringUtils.hasText(cfg.getPublicBaseUrl())) {
+            return cfg.getPublicBaseUrl().trim().replaceAll("/+$", "");
+        }
+        return (publicBaseUrl == null ? "http://localhost:5173" : publicBaseUrl.trim()).replaceAll("/+$", "");
     }
 
     @Async
@@ -99,7 +114,7 @@ public class WebhookNotifyService {
         }
         try {
             String title = buildAlertTitle(payload);
-            String markdown = buildAlertMarkdown(payload);
+            String markdown = buildAlertMarkdown(payload, cfg);
             postWebhook(cfg.getUrl(), title, markdown, payload);
             log.info("外部告警 Webhook 推送成功: alertId={}, type={}, level={}",
                     payload.getAlertId(), payload.getAlertType(), level);
@@ -108,17 +123,48 @@ public class WebhookNotifyService {
         }
     }
 
+    @Async
+    public void sendDeviceOfflineAsync(Long deviceId, String deviceName, String location, long offlineSeconds) {
+        WebhookConfig cfg = getConfig();
+        if (!cfg.isEnabled() || !cfg.isNotifyDeviceOffline() || !StringUtils.hasText(cfg.getUrl())) {
+            return;
+        }
+        try {
+            String title = "⚠️ 【门禁边缘节点离线告警】";
+            String name = StringUtils.hasText(deviceName) ? deviceName : ("设备 #" + deviceId);
+            String loc = StringUtils.hasText(location) ? location : "未配置部署位置";
+            String markdown = "### " + title + "\n"
+                    + "- **异常节点**：" + name + "（ID #" + deviceId + "）\n"
+                    + "- **部署位置**：" + loc + "\n"
+                    + "- **断联时长**：已超过 " + offlineSeconds + " 秒未上报心跳\n"
+                    + "- **排查建议**：请检查边缘 AI 进程（doorAlert.py）、摄像头连接或本地网络\n"
+                    + "- **检测时间**：" + java.time.LocalDateTime.now().format(TIME_FMT);
+            postWebhook(cfg.getUrl(), title, markdown, null);
+            log.info("设备离线 Webhook 告警推送成功: deviceId={}, offlineSec={}", deviceId, offlineSeconds);
+        } catch (Exception e) {
+            log.warn("设备离线 Webhook 告警推送失败: deviceId={}, err={}", deviceId, e.getMessage());
+        }
+    }
+
     public String sendTestNotification(String overrideUrl) {
+        return sendTestNotification(overrideUrl, null);
+    }
+
+    public String sendTestNotification(String overrideUrl, String overridePublicBaseUrl) {
         WebhookConfig cfg = getConfig();
         String targetUrl = StringUtils.hasText(overrideUrl) ? overrideUrl.trim() : cfg.getUrl();
         if (!StringUtils.hasText(targetUrl)) {
             throw new IllegalArgumentException("请先填写 Webhook 机器人地址");
         }
+        String effectiveBase = StringUtils.hasText(overridePublicBaseUrl)
+                ? overridePublicBaseUrl.trim().replaceAll("/+$", "")
+                : resolveEffectivePublicBaseUrl(cfg);
         String title = "【DoorAlert】告警通知通道测试";
         String markdown = "### 🔔 DoorAlert 智能门禁推送测试\n"
                 + "- **通道状态**：连通正常\n"
-                + "- **支持事件**：未授权入侵 / 尾随闯入 / 门前徘徊\n"
+                + "- **支持事件**：未授权入侵 / 尾随闯入 / 门前徘徊 / 防伪拦截 / 设备离线\n"
                 + "- **最低推送等级**：Level >= " + cfg.getMinDangerLevel() + "\n"
+                + "- **抓拍图访问基地址**：`" + effectiveBase + "`\n"
                 + "- **发送时间**：" + java.time.LocalDateTime.now().format(TIME_FMT);
         ResponseEntity<String> resp = postWebhook(targetUrl, title, markdown, null);
         return "HTTP " + resp.getStatusCode().value() + (resp.getBody() != null ? " · " + resp.getBody() : "");
@@ -179,7 +225,7 @@ public class WebhookNotifyService {
         };
     }
 
-    private String buildAlertMarkdown(AlertWsPayload p) {
+    private String buildAlertMarkdown(AlertWsPayload p, WebhookConfig cfg) {
         int level = p.getAlertLevel() != null ? p.getAlertLevel() : 2;
         String levelText = level >= 3 ? "高危 (Level 3)" : level == 2 ? "中危 (Level 2)" : "低危 (Level 1)";
         String proxText = p.getAreaRatio() != null
@@ -191,10 +237,11 @@ public class WebhookNotifyService {
         String imgLink = "";
         if (StringUtils.hasText(p.getImageUrl())) {
             String raw = p.getImageUrl().trim();
+            String base = resolveEffectivePublicBaseUrl(cfg);
             String fullUrl = raw.startsWith("http")
                     ? raw
-                    : publicBaseUrl.replaceAll("/$", "") + (raw.startsWith("/") ? "" : "/") + raw;
-            imgLink = "\n- **抓拍凭证**：[点击查看抓拍图](" + fullUrl + ")";
+                    : base + (raw.startsWith("/") ? "" : "/") + raw;
+            imgLink = "\n- **抓拍凭证**：[点击查看抓拍原图](" + fullUrl + ")\n\n![现场抓拍凭证](" + fullUrl + ")";
         }
 
         return "### " + buildAlertTitle(p) + "\n"
@@ -219,6 +266,10 @@ public class WebhookNotifyService {
                     runtimeConfig.setEnabled(saved.isEnabled());
                     runtimeConfig.setUrl(saved.getUrl() == null ? "" : saved.getUrl().trim());
                     runtimeConfig.setMinDangerLevel(Math.max(1, Math.min(3, saved.getMinDangerLevel())));
+                    if (StringUtils.hasText(saved.getPublicBaseUrl())) {
+                        runtimeConfig.setPublicBaseUrl(saved.getPublicBaseUrl().trim().replaceAll("/+$", ""));
+                    }
+                    runtimeConfig.setNotifyDeviceOffline(saved.isNotifyDeviceOffline());
                 }
             }
         } catch (Exception e) {
@@ -239,5 +290,7 @@ public class WebhookNotifyService {
         private boolean enabled = false;
         private String url = "";
         private int minDangerLevel = 2;
+        private String publicBaseUrl = "";
+        private boolean notifyDeviceOffline = true;
     }
 }

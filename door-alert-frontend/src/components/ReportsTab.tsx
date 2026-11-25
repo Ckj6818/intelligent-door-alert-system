@@ -17,6 +17,7 @@ import {
 import { NodeReport, SystemUser } from '../types';
 import { getUserList, addOperatorUser, deleteOperatorUser, resetOperatorPassword, exportAlerts, getPassageTodayStats, getPassagePage, getDeviceList, getAlertList } from '@/api/index';
 import { showCyberToast } from '../utils/cyberToast';
+import { showCyberConfirm } from '../utils/cyberConfirm';
 import * as XLSX from 'xlsx';
 
 interface ReportsTabProps {
@@ -29,6 +30,13 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   const [onlineSummary, setOnlineSummary] = useState({ online: 0, total: 0 });
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [passageStats, setPassageStats] = useState({ passageCount: 0, unauthorizedAlertCount: 0 });
+  const [trendDays, setTrendDays] = useState<{ date: string; passages: number; alerts: number }[]>([]);
+  const [alertTypeDist, setAlertTypeDist] = useState({
+    INTRUSION: 0,
+    SPOOFING: 0,
+    TAILGATING: 0,
+    LOITERING: 0,
+  });
   const [recentPassages, setRecentPassages] = useState<any[]>([]);
 
   useEffect(() => {
@@ -39,6 +47,15 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           passageCount: Number(res.passageCount) || 0,
           unauthorizedAlertCount: Number(res.unauthorizedAlertCount) || 0,
         });
+        if (Array.isArray(res.days)) {
+          setTrendDays(
+            res.days.map((d: any) => ({
+              date: String(d.date || ''),
+              passages: Number(d.passages) || 0,
+              alerts: Number(d.alerts) || 0,
+            }))
+          );
+        }
       })
       .catch(() => {});
     getPassagePage({ current: 1, size: 8 })
@@ -67,12 +84,18 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
       const onlineCount = deviceRecords.filter((d) => Number(d.status) === 1).length;
       setOnlineSummary({ online: onlineCount, total: deviceRecords.length });
 
-      // 按 deviceId 聚合真实告警统计
+      // 按 deviceId 与 alertType 聚合真实告警统计
+      const typeCounts = { INTRUSION: 0, SPOOFING: 0, TAILGATING: 0, LOITERING: 0 };
       const alertStats = new Map<
         number,
         { count: number; maxDanger: number; latestTime: string | null }
       >();
       for (const a of alertRecords) {
+        const at = String(a.alertType || 'INTRUSION').toUpperCase();
+        if (at === 'SPOOFING') typeCounts.SPOOFING += 1;
+        else if (at === 'TAILGATING') typeCounts.TAILGATING += 1;
+        else if (at === 'LOITERING') typeCounts.LOITERING += 1;
+        else typeCounts.INTRUSION += 1;
         const did = Number(a.deviceId);
         if (!did) continue;
         const prev = alertStats.get(did) || { count: 0, maxDanger: 1, latestTime: null };
@@ -83,6 +106,7 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
         }
         alertStats.set(did, prev);
       }
+      setAlertTypeDist(typeCounts);
 
       const mappedNodes: NodeReport[] = deviceRecords.map((d) => {
         const did = Number(d.id);
@@ -219,8 +243,14 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   };
 
   // Delete User
-  const handleDeleteUser = (id: string, name: string) => {
-    if (confirm(`是否确认吊销安全凭证并注销操作员 "${name}" 的系统账号？`)) {
+  const handleDeleteUser = async (id: string, name: string) => {
+    const ok = await showCyberConfirm({
+      title: '注销操作员账号确认',
+      message: `是否确认吊销安全凭证并永久注销操作员「${name}」的系统账号？`,
+      confirmText: '确认注销',
+      tone: 'danger',
+    });
+    if (ok) {
       deleteOperatorUser(id)
         .then(() => {
           setUsers(prev => prev.filter(u => u.id !== id));
@@ -231,8 +261,14 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
   };
 
   // Reset password
-  const handleResetPassword = (id: string, name: string) => {
-    if (confirm(`是否确认将操作员 "${name}" 的登录密码重置为：123456？`)) {
+  const handleResetPassword = async (id: string, name: string) => {
+    const ok = await showCyberConfirm({
+      title: '重置操作员登录密码',
+      message: `是否确认将操作员「${name}」的登录密码重置为默认密码：123456？`,
+      confirmText: '确认重置',
+      tone: 'warning',
+    });
+    if (ok) {
       resetOperatorPassword(id)
         .then(() => {
           showCyberToast(`操作员 "${name}" 密码已重置为 123456`, 'success');
@@ -294,6 +330,189 @@ export default function ReportsTab({ searchQuery }: ReportsTabProps) {
           </div>
         </div>
       </div>
+
+      {/* 真数据双维可视化图表：四类告警分布环图 + 近7日通行/拦截趋势 */}
+      {(() => {
+        const donutItems = [
+          { key: 'INTRUSION', label: '未授权入侵', count: alertTypeDist.INTRUSION, color: '#ff5252' },
+          { key: 'SPOOFING', label: '照片/屏幕防伪拦截', count: alertTypeDist.SPOOFING, color: '#fbbf24' },
+          { key: 'TAILGATING', label: '尾随闯入', count: alertTypeDist.TAILGATING, color: '#fb923c' },
+          { key: 'LOITERING', label: '门前遮挡徘徊', count: alertTypeDist.LOITERING, color: '#c084fc' },
+        ];
+        const totalAlerts = donutItems.reduce((acc, it) => acc + it.count, 0);
+        const radius = 56;
+        const circumference = 2 * Math.PI * radius;
+        let offsetCursor = 0;
+
+        const maxDayVal = Math.max(
+          1,
+          ...trendDays.map((d) => Math.max(d.passages, d.alerts))
+        );
+
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 font-sans">
+            {/* 四类告警事件分布环图 */}
+            <div className="glass-panel p-6 rounded-xl border border-outline-variant/15">
+              <div className="flex items-center justify-between mb-5">
+                <div>
+                  <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
+                    <BarChart className="w-4 h-4 text-cyber-primary" />
+                    四类安全告警分布统计
+                  </h3>
+                  <p className="text-[10px] text-on-surface-variant font-mono mt-0.5">
+                    REAL-TIME ALERT_TYPE DISTRIBUTION (最近 100 条归档)
+                  </p>
+                </div>
+                <span className="px-2.5 py-0.5 rounded bg-cyber-primary/10 border border-cyber-primary/30 text-cyber-primary font-mono text-[10px] font-bold">
+                  TOTAL {totalAlerts}
+                </span>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-6">
+                <div className="relative w-40 h-40 shrink-0">
+                  <svg viewBox="0 0 150 150" className="w-full h-full -rotate-90">
+                    <circle
+                      cx="75"
+                      cy="75"
+                      r={radius}
+                      fill="none"
+                      stroke="rgba(255,255,255,0.06)"
+                      strokeWidth="16"
+                    />
+                    {totalAlerts > 0 &&
+                      donutItems.map((it) => {
+                        if (it.count <= 0) return null;
+                        const segLen = (it.count / totalAlerts) * circumference;
+                        const dashArray = `${Math.max(2, segLen - 2)} ${circumference}`;
+                        const dashOffset = -offsetCursor;
+                        offsetCursor += segLen;
+                        return (
+                          <circle
+                            key={it.key}
+                            cx="75"
+                            cy="75"
+                            r={radius}
+                            fill="none"
+                            stroke={it.color}
+                            strokeWidth="16"
+                            strokeDasharray={dashArray}
+                            strokeDashoffset={dashOffset}
+                            strokeLinecap="butt"
+                            className="transition-all duration-500"
+                          />
+                        );
+                      })}
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-2xl font-bold text-on-surface tabular-nums">
+                      {totalAlerts}
+                    </span>
+                    <span className="text-[10px] text-on-surface-variant font-mono">告警总数</span>
+                  </div>
+                </div>
+
+                <div className="flex-1 w-full space-y-2.5">
+                  {donutItems.map((it) => {
+                    const pct = totalAlerts > 0 ? Math.round((it.count / totalAlerts) * 100) : 0;
+                    return (
+                      <div key={it.key} className="space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-2 text-on-surface">
+                            <span
+                              className="w-2.5 h-2.5 rounded-sm shrink-0"
+                              style={{ backgroundColor: it.color }}
+                            />
+                            {it.label}
+                          </span>
+                          <span className="font-mono text-[11px] text-on-surface-variant tabular-nums">
+                            <strong className="text-on-surface">{it.count}</strong> 条 ({pct}%)
+                          </span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-cyber-surface-lowest overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all duration-500"
+                            style={{ width: `${pct}%`, backgroundColor: it.color }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* 近 7 日授权通行 vs 异常拦截趋势图 */}
+            <div className="glass-panel p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-bold text-on-surface flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-cyber-secondary" />
+                    近 7 日通行放行 vs 异常拦截趋势
+                  </h3>
+                  <p className="text-[10px] text-on-surface-variant font-mono mt-0.5">
+                    PASSAGE_LOG VS ALERT_LOG 7-DAY TIMELINE
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 text-[10px] font-sans">
+                  <span className="flex items-center gap-1 text-cyber-secondary">
+                    <span className="w-2 h-2 rounded-sm bg-cyber-secondary" /> 授权通行
+                  </span>
+                  <span className="flex items-center gap-1 text-cyber-error">
+                    <span className="w-2 h-2 rounded-sm bg-cyber-error" /> 异常告警
+                  </span>
+                </div>
+              </div>
+
+              {trendDays.length === 0 ? (
+                <div className="h-40 flex items-center justify-center text-xs text-on-surface-variant">
+                  正在聚合近 7 日安全趋势数据...
+                </div>
+              ) : (
+                <div className="h-44 flex items-end justify-between gap-2 pt-4 px-1 border-b border-outline-variant/20">
+                  {trendDays.map((d) => {
+                    const passH = Math.max(4, Math.round((d.passages / maxDayVal) * 124));
+                    const alertH = Math.max(4, Math.round((d.alerts / maxDayVal) * 124));
+                    const shortDate = d.date.length >= 10 ? d.date.slice(5) : d.date;
+                    return (
+                      <div key={d.date} className="flex-1 flex flex-col items-center gap-1.5 group">
+                        <div className="w-full flex items-end justify-center gap-1 h-32">
+                          <div className="flex flex-col items-center gap-1">
+                            {d.passages > 0 && (
+                              <span className="text-[9px] font-mono text-cyber-secondary opacity-85">
+                                {d.passages}
+                              </span>
+                            )}
+                            <div
+                              title={`${d.date} 授权通行: ${d.passages} 次`}
+                              className="w-3.5 sm:w-4 rounded-t bg-gradient-to-t from-cyber-secondary/60 to-cyber-secondary transition-all duration-500 group-hover:brightness-125"
+                              style={{ height: `${d.passages > 0 ? passH : 3}px` }}
+                            />
+                          </div>
+                          <div className="flex flex-col items-center gap-1">
+                            {d.alerts > 0 && (
+                              <span className="text-[9px] font-mono text-cyber-error opacity-85">
+                                {d.alerts}
+                              </span>
+                            )}
+                            <div
+                              title={`${d.date} 异常告警: ${d.alerts} 次`}
+                              className="w-3.5 sm:w-4 rounded-t bg-gradient-to-t from-cyber-error/60 to-cyber-error transition-all duration-500 group-hover:brightness-125"
+                              style={{ height: `${d.alerts > 0 ? alertH : 3}px` }}
+                            />
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-mono text-on-surface-variant pb-1">
+                          {shortDate}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="glass-panel p-5 rounded-lg font-sans">
         <div className="flex items-center justify-between mb-3">

@@ -8,6 +8,7 @@ import {
   deleteAuthorizedUser,
 } from '@/api/index';
 import type { AuthorizedUser } from '../types';
+import { showCyberConfirm } from '../utils/cyberConfirm';
 
 interface AuthorizedUsersModalProps {
   open: boolean;
@@ -220,14 +221,20 @@ export default function AuthorizedUsersModal({ open, onClose }: AuthorizedUsersM
       .finally(() => setAvatarSubmitting(false));
   };
 
-  const handleToggleStatus = (user: AuthorizedUser) => {
+  const handleToggleStatus = async (user: AuthorizedUser) => {
     if (!isAdmin) {
       setError('仅超级管理员可修改授权状态');
       return;
     }
     const next = user.status === 1 ? 0 : 1;
     const tip = next === 1 ? '启用' : '禁用';
-    if (!window.confirm(`确认${tip}「${user.name}」？将同步边缘人脸库。`)) return;
+    const ok = await showCyberConfirm({
+      title: `${tip}授权白名单人员`,
+      message: `确认${tip}「${user.name}」的门禁通行权限？\n操作后将实时写入 .reload 信号并热同步边缘人脸特征库。`,
+      confirmText: `确认${tip}`,
+      tone: next === 1 ? 'primary' : 'warning',
+    });
+    if (!ok) return;
 
     setError('');
     setSuccess('');
@@ -245,12 +252,18 @@ export default function AuthorizedUsersModal({ open, onClose }: AuthorizedUsersM
       });
   };
 
-  const handleDelete = (user: AuthorizedUser) => {
+  const handleDelete = async (user: AuthorizedUser) => {
     if (!isAdmin) {
       setError('仅超级管理员可删除授权人员');
       return;
     }
-    if (!window.confirm(`确认删除「${user.name}」？将同步移除边缘人脸文件。`)) return;
+    const ok = await showCyberConfirm({
+      title: '删除授权人员确认',
+      message: `确认彻底删除授权人员「${user.name}」？\n系统将同步移除边缘端多角度人脸底库照片并重载特征矩阵。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+    });
+    if (!ok) return;
 
     setError('');
     setSuccess('');

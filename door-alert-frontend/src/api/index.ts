@@ -334,6 +334,8 @@ export interface WebhookConfigPayload {
   enabled: boolean;
   url: string;
   minDangerLevel: number;
+  publicBaseUrl?: string;
+  notifyDeviceOffline?: boolean;
 }
 
 export function getWebhookConfig(): Promise<WebhookConfigPayload> {
@@ -351,10 +353,13 @@ export function saveWebhookConfig(data: WebhookConfigPayload): Promise<WebhookCo
   });
 }
 
-export function testWebhook(url?: string): Promise<string> {
+export function testWebhook(url?: string, publicBaseUrl?: string): Promise<string> {
   return request({
     url: '/webhook/test',
     method: 'post',
-    data: url ? { url } : {},
+    data: {
+      ...(url ? { url } : {}),
+      ...(publicBaseUrl ? { publicBaseUrl } : {}),
+    },
   });
 }

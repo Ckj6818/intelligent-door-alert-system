@@ -13,11 +13,14 @@ import {
   RotateCcw,
   Check,
   Video,
-  RefreshCw
+  RefreshCw,
+  X,
+  ExternalLink
 } from 'lucide-react';
 import { DeviceStatus, LiveFeedItem, Alert } from '../types';
 import { addDevice, updateDevice, deleteDevice, getDeviceList, getPassageTodayStats, saveEdgeConfig } from '@/api/index';
 import { showCyberToast } from '../utils/cyberToast';
+import { showCyberConfirm } from '../utils/cyberConfirm';
 
 /**
  * 边缘 YOLO MJPEG：默认同源代理 /video-stream（Vite/Nginx → :8090），
@@ -41,6 +44,7 @@ interface DashboardTabProps {
   setLiveFeed: React.Dispatch<React.SetStateAction<LiveFeedItem[]>>;
   triggerThreatEvent: () => void;
   alerts: Alert[];
+  onNavigateToAlerts?: () => void;
 }
 
 export default function DashboardTab({ 
@@ -50,8 +54,10 @@ export default function DashboardTab({
   liveFeed, 
   setLiveFeed,
   triggerThreatEvent,
-  alerts
+  alerts,
+  onNavigateToAlerts
 }: DashboardTabProps) {
+  const [selectedFeed, setSelectedFeed] = useState<LiveFeedItem | null>(null);
   const [timeRange, setTimeRange] = useState<'1h' | '24h'>('24h');
   const [inferenceData, setInferenceData] = useState<{ x: number; y1: number; y2: number }[]>([]);
   const [streamOnline, setStreamOnline] = useState(false);
@@ -255,8 +261,14 @@ export default function DashboardTab({
     setShowDeviceModal(true);
   };
 
-  const handleDeleteDeviceClick = (id: string, name: string) => {
-    if (confirm(`确认删除监控设备节点「${name}」并解除其连接配置吗？`)) {
+  const handleDeleteDeviceClick = async (id: string, name: string) => {
+    const ok = await showCyberConfirm({
+      title: '移除监控设备节点',
+      message: `确认删除监控设备节点「${name}」并解除其心跳连接配置吗？`,
+      confirmText: '确认删除',
+      tone: 'danger',
+    });
+    if (ok) {
       deleteDevice(id)
         .then(() => {
           setDevices(prev => prev.filter(d => d.id !== id));
@@ -370,18 +382,30 @@ export default function DashboardTab({
           </button>
           <button
             onClick={() => {
-              // Reset state back to nominal values
-              setDevices([
-                { id: '1', name: '大门入口_Cam_01', ip: '192.168.1.104', status: 'online', latency: 12 },
-                { id: '2', name: '后装卸货台_Cam_B', ip: '192.168.1.108', status: 'online', latency: 18 },
-                { id: '3', name: '南侧警戒大门_P3', ip: '192.168.1.112', status: 'offline', latency: 0, lastTimeout: '04:22' }
-              ]);
-              alert('监控设备状态矩阵已重置为正常标称参数。');
+              getDeviceList({ current: 1, size: 50 })
+                .then((res: any) => {
+                  const records = res?.records || [];
+                  const mapped: DeviceStatus[] = records.map((d: any) => {
+                    const elapsed =
+                      d.lastHeartbeatElapsedSec != null ? Number(d.lastHeartbeatElapsedSec) : null;
+                    return {
+                      id: String(d.id),
+                      name: d.deviceName,
+                      ip: d.location || d.ip || '192.168.1.' + (100 + Number(d.id || 0)),
+                      status: d.status === 1 ? 'online' : 'offline',
+                      latency: d.status === 1 ? (elapsed != null ? Math.max(1, Math.min(30, elapsed)) : 1) : 0,
+                      lastTimeout: d.status === 0 ? '心跳超时/未连接' : undefined,
+                    };
+                  });
+                  setDevices(mapped);
+                  showCyberToast(`已刷新 ${mapped.length} 个真实设备节点的在线心跳状态`, 'success');
+                })
+                .catch(() => showCyberToast('刷新设备状态失败，请检查后端连接', 'error'));
             }}
-            className="px-4 py-2 bg-cyber-surface-high border border-outline-variant/40 text-on-surface font-sans text-xs rounded flex items-center gap-2 hover:bg-cyber-surface-highest transition-all"
+            className="px-4 py-2 bg-cyber-surface-high border border-outline-variant/40 text-on-surface font-sans text-xs rounded flex items-center gap-2 hover:bg-cyber-surface-highest transition-all cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            重置设备矩阵
+            刷新设备心跳
           </button>
         </div>
       </div>
@@ -1087,7 +1111,7 @@ export default function DashboardTab({
                         ? 'border-cyber-error/30 hover:border-cyber-error/60'
                         : 'border-outline-variant/15 hover:border-cyber-primary/50'
                   }`}
-                  onClick={() => alert(`正在调取监控节点详情。视频流ID: ${feed.id}。事件描述：${feed.title}。防区：${feed.zone}。AI 置信度：${feed.confidence}。`)}
+                  onClick={() => setSelectedFeed(feed)}
                 >
                   <div className="h-32 bg-cyber-surface-lowest relative overflow-hidden">
                     {feed.imageSrc ? (
@@ -1141,15 +1165,91 @@ export default function DashboardTab({
             {/* Full History button */}
             <div className="p-4 border-t border-outline-variant/10">
               <button 
-                onClick={() => alert('正在接入历史冷存储离线盘库，直接安全通道已建立。')}
-                className="w-full py-2.5 bg-cyber-surface-high/40 hover:bg-cyber-surface-highest border border-outline-variant/20 rounded font-sans text-xs text-on-surface-variant hover:text-on-surface transition-colors"
+                onClick={() => {
+                  if (onNavigateToAlerts) {
+                    onNavigateToAlerts();
+                  } else {
+                    showCyberToast('请点击左侧「预警处置流转」查看全部历史抓拍归档', 'info');
+                  }
+                }}
+                className="w-full py-2.5 bg-cyber-surface-high/40 hover:bg-cyber-surface-highest border border-outline-variant/20 rounded font-sans text-xs text-on-surface-variant hover:text-cyber-primary transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
               >
-                调取系统监控历史底片
+                <ExternalLink className="w-3.5 h-3.5" />
+                进入预警流转中心查看全部历史抓拍
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Live Feed Detail Modal */}
+      {selectedFeed && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setSelectedFeed(null)}
+        >
+          <div
+            className="glass-panel max-w-xl w-full rounded-xl overflow-hidden border border-cyber-primary/35 shadow-2xl animate-in zoom-in-95 duration-150 font-sans"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 border-b border-outline-variant/15 flex items-center justify-between bg-cyber-surface-low/80">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${
+                  selectedFeed.type === 'authorized' ? 'bg-cyber-secondary' : 'bg-cyber-error'
+                }`} />
+                <h3 className="text-sm font-bold text-on-surface">{selectedFeed.title}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedFeed(null)}
+                className="text-on-surface-variant hover:text-on-surface p-1 rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="bg-black/80 aspect-video flex items-center justify-center overflow-hidden">
+              {selectedFeed.imageSrc ? (
+                <img
+                  src={selectedFeed.imageSrc}
+                  alt={selectedFeed.title}
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <span className="text-xs text-on-surface-variant">该事件暂无抓拍图片</span>
+              )}
+            </div>
+            <div className="p-4 flex flex-wrap items-center justify-between gap-3 bg-cyber-surface-low/60 text-xs">
+              <div className="space-y-1 text-on-surface-variant">
+                <p>防区位置：<span className="text-on-surface font-medium">{selectedFeed.zone}</span></p>
+                <p className="font-mono text-[11px]">
+                  事件编号：{selectedFeed.id} · 时间：{selectedFeed.time} · 接近度/置信度：{selectedFeed.confidence}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {onNavigateToAlerts && selectedFeed.type !== 'authorized' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFeed(null);
+                      onNavigateToAlerts();
+                    }}
+                    className="px-3.5 py-1.5 rounded-lg bg-cyber-primary text-cyber-bg font-bold text-xs hover:brightness-110 cursor-pointer"
+                  >
+                    前往处置工单
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedFeed(null)}
+                  className="px-3.5 py-1.5 rounded-lg bg-cyber-surface-high border border-outline-variant/25 text-on-surface text-xs hover:bg-cyber-surface-highest cursor-pointer"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Device Management Modal */}
       {showDeviceModal && (

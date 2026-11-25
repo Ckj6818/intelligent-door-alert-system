@@ -36,7 +36,8 @@ public class WebhookController {
     public Result<String> test(@RequestBody(required = false) Map<String, String> body) {
         try {
             String url = body != null ? body.get("url") : null;
-            String resp = webhookNotifyService.sendTestNotification(url);
+            String publicBaseUrl = body != null ? body.get("publicBaseUrl") : null;
+            String resp = webhookNotifyService.sendTestNotification(url, publicBaseUrl);
             return Result.success("测试消息发送成功", resp);
         } catch (Exception e) {
             return Result.error("测试消息发送失败: " + e.getMessage());

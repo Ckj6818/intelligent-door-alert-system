@@ -10,6 +10,7 @@ import SettingsTab from './components/SettingsTab';
 import AlertPopup from './components/AlertPopup';
 import PassageToast from './components/PassageToast';
 import CyberToastHost from './components/CyberToastHost';
+import CyberConfirmHost from './components/CyberConfirmHost';
 import AuthorizedUsersModal from './components/AuthorizedUsersModal';
 import { getDeviceList, getAlertList, getRecycleBin, handleAlert } from '@/api/index';
 import {
@@ -21,6 +22,7 @@ import {
 } from './utils/alertMapper';
 import { playPassageChime, playThreatAlarm } from './utils/audioFeedback';
 import { showCyberToast } from './utils/cyberToast';
+import { showCyberConfirm } from './utils/cyberConfirm';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('token') !== null);
@@ -244,13 +246,20 @@ export default function App() {
     localStorage.setItem('username', user);
   };
 
-  const handleLogout = () => {
-    if (confirm('确认退出当前操作员系统会话？')) {
+  const handleLogout = async () => {
+    const ok = await showCyberConfirm({
+      title: '退出安全控制台会话',
+      message: '确认退出当前操作员系统会话并返回登录页吗？',
+      confirmText: '确认退出',
+      tone: 'warning',
+    });
+    if (ok) {
       setIsLoggedIn(false);
       localStorage.removeItem('token');
       localStorage.removeItem('user_role');
       localStorage.removeItem('username');
       setSearchQuery('');
+      showCyberToast('已安全退出当前会话', 'info');
     }
   };
 
@@ -355,6 +364,7 @@ export default function App() {
             setLiveFeed={setLiveFeed}
             triggerThreatEvent={triggerThreatEvent}
             alerts={alerts}
+            onNavigateToAlerts={() => setActiveTab('workflow')}
           />
         );
       case 'workflow':
@@ -388,13 +398,19 @@ export default function App() {
             setLiveFeed={setLiveFeed}
             triggerThreatEvent={triggerThreatEvent}
             alerts={alerts}
+            onNavigateToAlerts={() => setActiveTab('workflow')}
           />
         );
     }
   };
 
   if (!isLoggedIn) {
-    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <>
+        <LoginScreen onLoginSuccess={handleLoginSuccess} />
+        <CyberToastHost />
+      </>
+    );
   }
 
   return (
@@ -423,6 +439,7 @@ export default function App() {
       </main>
 
       <CyberToastHost />
+      <CyberConfirmHost />
 
       {/* 右上角授权通行通知栈 */}
       <div className="fixed top-20 right-6 z-[105] flex flex-col gap-3 pointer-events-none">

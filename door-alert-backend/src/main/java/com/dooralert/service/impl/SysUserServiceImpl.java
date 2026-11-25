@@ -69,7 +69,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new RuntimeException("不允许修改管理员账户");
         }
         if (dto.getPassword() != null && !dto.getPassword().isBlank()) {
-            entity.setPassword(dto.getPassword());
+            entity.setPassword(PASSWORD_ENCODER.encode(dto.getPassword().trim()));
         }
         if (dto.getNickname() != null && !dto.getNickname().isBlank()) {
             entity.setNickname(dto.getNickname().trim());

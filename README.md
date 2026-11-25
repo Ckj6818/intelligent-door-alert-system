@@ -9,7 +9,7 @@
 边缘实时行人跟踪 · 多角度人脸核验 · 透视距离与行为识别 · 钉钉/企微/飞书推送 · 云边协同大屏
 
 [![CI](https://github.com/Ckj6818/intelligent-door-alert-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Ckj6818/intelligent-door-alert-system/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/Release-v1.4.0-06b6d4.svg?style=flat-square)](https://github.com/Ckj6818/intelligent-door-alert-system/releases)
+[![Release](https://img.shields.io/badge/Release-v1.5.0-06b6d4.svg?style=flat-square)](https://github.com/Ckj6818/intelligent-door-alert-system/releases)
 [![License](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![YOLOv8](https://img.shields.io/badge/YOLOv8-ByteTrack-f97316.svg?style=flat-square)](https://github.com/ultralytics/ultralytics)
@@ -52,31 +52,32 @@
 </td>
 <td width="50%" valign="top">
 
-### ⚡ 2. YuNet + SFace 多角度高准身份核验
-- **严格 5 关键点侧脸姿态门控**：强制校验证件级正脸几何约束（鼻尖偏转对称度 `≤ 0.20`、双目水平间距占比 `≥ 0.32`、鼻尖落于双目区间内）叠加拉普拉斯清晰度过滤，大角度侧脸或运动模糊帧保持「识别中」绝不误报陌生人。
-- **同人多角度底库融合与矩阵点乘**：自动聚合 `姓名.jpg`、`姓名_左.jpg`、`姓名_右.jpg` 等同人多张底库并辅以水平翻转双模板增广，预归一化为连续 `float32` 特征矩阵，实时比对仅需单次矩阵点乘。
-- **行内「📷 补录/更新照片」与摄像头实时抓拍**：授权人员管理支持按人**替换 / 追加**多角度底库，前端可直接调用边缘端 `GET /snapshot` 一键现场抓拍并实时展示人脸检测与质量评估状态；多目标由 `threading.local()` + 线程池并发核验并按 `track_id` 独立防抖。
+### ⚡ 2. YuNet + SFace 完整度门控与多角度防伪核验
+- **五官与视野边界完整度门控**：强制校验 YuNet 置信度（`≥ 0.78`）、五官纵向解剖比例（眼→鼻→嘴间距）及画面四边截断状态，防止只露半张脸或低头遮挡嘴部（如喝水/进食）时误报陌生人；同时自适应近景半身 ROI 裁剪，避免近距桌面摄像头裁掉下巴。
+- **双重物理防伪拦截引擎（`SPOOFING`）**：融合 **YOLOv8n COCO 电子屏/手机/相册实体检测**（`cell phone / tv / laptop / book` 二次核验屏幕内人脸与高亮屏）+ **三边 `Π` 型黑边亮屏跃变与四边正交梯度边框检测**，一旦检出手机翻拍或照片冒用即刻清除历史授权缓存并阻断放行。
+- **同人多角度底库融合与行内抓拍**：自动聚合 `姓名.jpg`、`姓名_后缀.jpg` 等同人多张底库并辅以水平翻转双模板增广，前端可直接调用 `GET /snapshot` 一键现场抓拍建库并实时反馈人脸质量状态。
 
 </td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 
-### 🛡️ 3. 多场景异常识别与多渠道触达
-- **三类核心安防事件**：
+### 🛡️ 3. 四类核心异常识别与多渠道触达
+- **四类核心安防事件**：
   - `INTRUSION`：非授权人员/陌生人进入近场防区告警
+  - `SPOOFING`：手机亮屏 / 纸质照片翻拍冒用防伪拦截告警（琥珀色高亮标识）
   - `TAILGATING`：授权人员通行后短时间窗口内陌生人尾随闯入告警
   - `LOITERING`：门前防区长时间遮挡徘徊超时告警
-- **钉钉 / 企业微信 / 飞书 Webhook 异步推送**：后端 `@Async` 异步分发分级告警详情，按地址自动适配三大主流群机器人协议；设置页内置配置表单与一键测试入口，本地配置 `webhook-config.json` 已被 `.gitignore` 隔离防密钥泄露。
+- **钉钉 / 企业微信 / 飞书 Webhook 增强推送**：支持按平台自动适配协议、页面动态配置**抓拍图外网/局域网访问基地址**与卡片内嵌缩略图预览，并在边缘节点心跳超时掉线时主动发送**设备离线告警**。
 - **暗光增强、离线缓存与 Docker 共享底库**：夜间启用 CLAHE 自适应增强；断联时自动写入 FIFO 离线队列补传；容器编排通过 `authorized_faces` 共享卷与 `X-Edge-Token` 实现跨容器白名单秒级热同步。
 
 </td>
 <td width="50%" valign="top">
 
-### 🖥️ 4. 全真数据离线大屏与闭环工单治理
-- **零延迟 MJPEG 预览与可视化交互**：边缘端 `8090` 端口提供局部贴片渲染的高对比度中文 HUD 视频流、`/health` 实时遥测及 `/snapshot` 纯净抓拍；支持网页**鼠标绘制多边形 ROI 防区**与**免重启热切换 RTSP/USB 视频源**。
-- **100% 真数据闭环与纯离线 UI**：移除全部外部图床/CDN 依赖，断网内网环境零加载报错；设备心跳计时、AI 推理耗时曲线、审计报表统计均直连后端真实数据，拒绝静态假数据。
-- **分级声光与全生命周期工单治理**：授权通行仅轻量提示；告警触发红框与 Web Audio 分频音效；工单中心支持按 `INTRUSION / TAILGATING / LOITERING` 事件类型与中文状态联动筛选、动态 KPI 实时计算及 `@Scheduled` 回收站超期物理清理。
+### 🖥️ 4. 全真数据离线大屏、审计闭环与可视化报表
+- **零原生弹窗赛博交互体系**：全站内置全局 `CyberToastHost` 与 `CyberConfirmHost` 赛博弹窗体系，彻底摒弃浏览器原生 `alert/confirm`，实时预览支持鼠标绘制多边形 ROI 防区、免重启热切换 RTSP/USB 视频源及事件流抓拍大图直览。
+- **工单处置全流程审计闭环**：告警处置自动持久化记录**处置人（`handler`）、处置时间（`handle_time`）与快捷/自定义复核结论（`handle_remark`）**，支持「重新核实」回退待处理状态，并完整导出至 `.xlsx` 审计报表。
+- **真数据多维图表与系统安全治理**：数据管理中心集成**四类告警分布环图**与**近 7 日通行/拦截趋势对比柱图**；设置页内置回收站自动保留周期策略（24h / 7天 / 永久）、活体防伪开关与 BCrypt 个人密码修改功能。
 
 </td>
 </tr>
@@ -348,7 +349,8 @@ intelligent-door-alert-system/
 ├── scripts/                  # Windows 批处理辅助启动脚本
 ├── docker-compose.yml        # 容器化一键编排配置（共享 authorized_faces 卷与 8090 端口映射）
 ├── docker-compose.camera.yml # Linux 物理摄像头设备挂载叠加配置
-└── start_all.bat             # Windows 本地开发环境一键启动脚本
+├── start_all.bat             # Windows 本地开发环境一键启动脚本
+└── stop_all.bat              # Windows 本地开发环境一键优雅停服脚本
 ```
 
 ---
